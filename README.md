@@ -41,7 +41,46 @@ CLI TUI  ──┘                      (ОДИН сервер, ОДНА сес�
 ```powershell
 git clone <this-repo> cc-connect-bridge
 cd cc-connect-bridge
+python setup.py
+```
 
+Восемь вопросов — дальше установщик сам пишет конфиги, ставит шим, регистрирует
+задачи и проверяет результат. Единственное, что нужно заранее, — токен бота у
+[@BotFather](https://t.me/BotFather).
+
+Посмотреть, ничего не записывая:
+
+```powershell
+python setup.py --dry-run
+```
+
+Для скриптов и машин без диалога:
+
+```powershell
+python setup.py --yes --project-dir C:\src\my-app --token 123:ABC --name demo --autostart
+```
+
+### Что спрашивает установщик
+
+| Шаг | Вопрос | Откуда берёт |
+|---|---|---|
+| 1 | ничего | проверяет opencode, cc-connect, ffmpeg, edge-tts, Handy |
+| 2 | токен бота | вы, с проверкой формата |
+| 3 | папка проекта | вы, либо создаёт |
+| 4 | модель по умолчанию | меню из 12 бесплатных, дефолт `space-bunny-free` |
+| 5 | имя сессии | вы, либо из имени папки |
+| 6 | голос на вход | предлагает, если Handy и модель уже скачаны |
+| 7 | голос на выход | по умолчанию **выключен** |
+| 8 | — | пишет конфиги и сверяет результат |
+
+После записи установщик **перечитывает каждый ответ из файла на диске** и сверяет.
+Не совпало — останавливается, а не оставляет молча неверный конфиг.
+
+### Установка вручную
+
+Если установщик не подходит — те же шаги по отдельности:
+
+```powershell
 # 1. Модель по умолчанию (бесплатная, ключ не нужен)
 copy opencode.jsonc.example.json "$env:USERPROFILE\.config\opencode\opencode.jsonc"
 
@@ -59,11 +98,7 @@ powershell -ExecutionPolicy Bypass -File .\opencode-shim\install-npm-shim.ps1
 # 5. Автозагрузка
 powershell -ExecutionPolicy Bypass -File .\install-autostart.ps1
 
-# 6. Запуск
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.cc-connect\start-cc-connect.ps1"
-powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.cc-connect\gigaam-stt\start-gigaam-stt.ps1"
-
-# 7. Проверка
+# 6. Проверка
 powershell -ExecutionPolicy Bypass -File .\autostart-test.ps1
 ```
 

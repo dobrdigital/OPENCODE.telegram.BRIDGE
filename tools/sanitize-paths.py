@@ -48,21 +48,42 @@ FILES = [
 
 
 def main() -> int:
-    root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else ".")
+    check = "--check" in sys.argv
+    rest = [a for a in sys.argv[1:] if not a.startswith("-")]
+    root = pathlib.Path(rest[0] if rest else ".")
     touched = 0
+    offenders = []
+
     for rel in FILES:
         p = root / rel
         if not p.exists():
-            print("  missing:", rel)
+            if not check:
+                print("  missing:", rel)
             continue
         original = p.read_text(encoding="utf-8")
         s = original
         for a, b in SUBS:
-            s = s.replace(a, b)
+            if a:
+                s = s.replace(a, b)
         if s != original:
-            p.write_text(s, encoding="utf-8", newline="")
-            print("  sanitized:", rel)
             touched += 1
+            if check:
+                offenders.append(rel)
+            else:
+                p.write_text(s, encoding="utf-8", newline="")
+                print("  sanitized:", rel)
+
+    if check:
+        # Used by CI: fail if a file still carries host-specific paths, so a
+        # machine-specific string cannot be published by accident.
+        if offenders:
+            print("host-specific paths still present in:")
+            for rel in offenders:
+                print("  -", rel)
+            return 1
+        print("portable: no host paths found")
+        return 0
+
     print("files changed:", touched)
     return 0
 

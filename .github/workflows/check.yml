@@ -1,0 +1,70 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  templates:
+    name: templates and installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: syntax of every script
+        run: python tools\check-syntax.py
+
+      - name: templates are installable
+        run: python tools\check-install.py
+
+      - name: no secrets committed
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tracked = git ls-files
+          $bad = @()
+          foreach ($f in $tracked) {
+            $hit = Select-String -Path $f -Pattern 'AAHBcy|token\s*=\s*"[0-9]{8,}:|hi58UTjo' -ErrorAction SilentlyContinue
+            if ($hit) { $bad += $f }
+          }
+          if ($bad.Count) {
+            Write-Error "possible secret in: $($bad -join ', ')"
+            exit 1
+          }
+          Write-Host "clean: $($tracked.Count) files scanned"
+
+      - name: paths are portable
+        run: python tools\sanitize-paths.py --check
+
+  shim:
+    name: compatibility shim
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: unit and stub e2e tests
+        run: node --test opencode-shim/test-opencode-shim.js
+
+      - name: contract tests were skipped as expected
+        run: |
+          # CI has no OpenCode installed, so the contract layer must skip
+          # rather than fail. If this ever goes red, the skip logic broke.
+          node --test opencode-shim/test-opencode-shim.js 2>&1 |
+            Select-String "skipped real OpenCode binary not installed" |
+            Select-Object -First 1
+
+      - name: npm wiring is correct
+        shell: pwsh
+        # The shim is pointless unless the npm launchers point at it. This is
+        # also what an `npm i -g @opencode/cli` silently undoes.
+        run: ./opencode-shim/install-npm-shim.ps1 -Verify

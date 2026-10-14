@@ -36,7 +36,22 @@ const REAL_BIN =
   process.env.OPENCODE_REAL_BIN ||
   path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@opencode', 'cli', 'bin', 'opencode.exe');
 
-const CC_WORK_DIR = '<PROJECT_DIR>';
+// Working directory for the contract tests. It must exist and be a real
+// directory - the shim falls back to its own cwd when --dir is unusable, so a
+// placeholder path would silently exercise a different code path than the one
+// being tested. Default to a throwaway directory rather than a machine path,
+// which is also what keeps this file publishable.
+const CC_WORK_DIR = fs.existsSync(process.env.CC_WORK_DIR || '')
+  ? process.env.CC_WORK_DIR
+  : fs.mkdtempSync(path.join(os.tmpdir(), 'cc-shim-contract-'));
+
+// Contract tests exercise the REAL OpenCode binary. CI has no OpenCode
+// installed, so skip rather than fail: a red build on a missing dependency
+// teaches people to ignore red builds.
+const HAS_REAL_BIN = fs.existsSync(REAL_BIN);
+const needsRealBin = {
+  skip: HAS_REAL_BIN ? false : 'real OpenCode binary not installed (skipped in CI)',
+};
 
 const { stripDirArg, resolveCwd } = require(SHIM);
 
@@ -228,7 +243,7 @@ test('unit: rewrite survives a preceding --dir being stripped', () => {
   );
 });
 
-test('contract: real OpenCode rejects session list --json', () => {
+test('contract: real OpenCode rejects session list --json', needsRealBin, () => {
   const res = spawnSync(REAL_BIN, ['session', 'list', '--json'], {
     encoding: 'utf8',
     cwd: CC_WORK_DIR,
@@ -241,7 +256,7 @@ test('contract: real OpenCode rejects session list --json', () => {
   );
 });
 
-test('contract: through the shim, cc-connect argv for /list returns JSON', () => {
+test('contract: through the shim, cc-connect argv for /list returns JSON', needsRealBin, () => {
   const res = spawnSync(NODE, [SHIM, 'session', 'list', '--json'], {
     encoding: 'utf8',
     cwd: CC_WORK_DIR,
@@ -262,11 +277,11 @@ test('contract: through the shim, cc-connect argv for /list returns JSON', () =>
 /* 3. contract — the real OpenCode 2.0.28 binary                      */
 /* ------------------------------------------------------------------ */
 
-test('contract: real OpenCode binary is present', () => {
+test('contract: real OpenCode binary is present', needsRealBin, () => {
   assert.ok(fs.existsSync(REAL_BIN), 'missing OpenCode binary: ' + REAL_BIN);
 });
 
-test('contract: without the shim, OpenCode 2.0.28 rejects --dir', () => {
+test('contract: without the shim, OpenCode 2.0.28 rejects --dir', needsRealBin, () => {
   const res = spawnSync(REAL_BIN, ['run', '--dir', CC_WORK_DIR, 'say ok'], {
     encoding: 'utf8',
     timeout: 90000,
@@ -279,7 +294,7 @@ test('contract: without the shim, OpenCode 2.0.28 rejects --dir', () => {
   );
 });
 
-test('contract: through the shim, the cc-connect argv runs clean', { timeout: 180000 }, () => {
+test('contract: through the shim, the cc-connect argv runs clean', { ...needsRealBin, timeout: 180000 }, () => {
   // Exactly what cc-connect v1.5.0 buildRunArgs() produces, including --dir.
   const ccArgs = [
     'run',
