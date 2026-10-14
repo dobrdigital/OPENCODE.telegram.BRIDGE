@@ -281,17 +281,50 @@ test('contract: real OpenCode binary is present', needsRealBin, () => {
   assert.ok(fs.existsSync(REAL_BIN), 'missing OpenCode binary: ' + REAL_BIN);
 });
 
+/* ------------------------------------------------------------------ */
+/* 4. cleanup - the contract tests are not a sandbox                    */
+/* ------------------------------------------------------------------ */
+
+/*
+ * `opencode run` writes a real session row into the shared production
+ * database. Measured on this machine: one test run took opencode.db from 21
+ * sessions to 22, and the leftovers accumulate as "Ответ одним словом"
+ * entries that a person later has to recognise as rubbish by hand.
+ *
+ * XDG_DATA_HOME is not an escape. It relocates the client's log and repos
+ * directories, but the CLI attaches to the running `serve --service`, and the
+ * database belongs to that server - so the session lands in the real file
+ * regardless.
+ *
+ * The session id is printed in the run output, so each test can delete
+ * precisely what it created instead of guessing at a cleanup rule.
+ */
+function deleteSessionCreatedBy(stdout, cwd) {
+  const m = /ses_[A-Za-z0-9]+/.exec(stdout || '');
+  if (!m) return false;
+  const r = spawnSync(REAL_BIN, ['session', 'delete', m[0]], {
+    encoding: 'utf8',
+    cwd: cwd || CC_WORK_DIR,
+    timeout: 90000,
+  });
+  return r.status === 0;
+}
+
 test('contract: without the shim, OpenCode 2.0.28 rejects --dir', needsRealBin, () => {
   const res = spawnSync(REAL_BIN, ['run', '--dir', CC_WORK_DIR, 'say ok'], {
     encoding: 'utf8',
     timeout: 90000,
   });
   const out = (res.stdout || '') + (res.stderr || '');
-  assert.match(
-    out,
-    /Unrecognized flag: --dir/,
-    'expected OpenCode to reject --dir; got: ' + out.slice(0, 300)
-  );
+  try {
+    assert.match(
+      out,
+      /Unrecognized flag: --dir/,
+      'expected OpenCode to reject --dir; got: ' + out.slice(0, 300)
+    );
+  } finally {
+    deleteSessionCreatedBy(out);
+  }
 });
 
 test('contract: through the shim, the cc-connect argv runs clean', { ...needsRealBin, timeout: 180000 }, () => {
@@ -315,15 +348,22 @@ test('contract: through the shim, the cc-connect argv runs clean', { ...needsRea
 
   const out = (res.stdout || '') + (res.stderr || '');
 
-  assert.ok(
-    !/Unrecognized flag/.test(out),
-    'shim failed to strip --dir. Output: ' + out.slice(0, 500)
-  );
-  assert.strictEqual(res.status, 0, 'exit code ' + res.status + '. Output: ' + out.slice(0, 500));
+  try {
+    assert.ok(
+      !/Unrecognized flag/.test(out),
+      'shim failed to strip --dir. Output: ' + out.slice(0, 500)
+    );
+    assert.strictEqual(res.status, 0, 'exit code ' + res.status + '. Output: ' + out.slice(0, 500));
 
-  // The agent must actually have produced a turn, not merely exited 0.
-  assert.ok(
-    /"type"\s*:\s*"(text|step_finish)"/.test(out),
-    'no agent events on stdout. Output: ' + out.slice(0, 500)
-  );
+    // The agent must actually have produced a turn, not merely exited 0.
+    assert.ok(
+      /"type"\s*:\s*"(text|step_finish)"/.test(out),
+      'no agent events on stdout. Output: ' + out.slice(0, 500)
+    );
+  } finally {
+    // This test provably talks to the model and therefore provably leaves a
+    // session behind. Cleaning up in `finally` means a failing assertion
+    // does not leak one either - which is how five of them got there.
+    deleteSessionCreatedBy(out, CC_WORK_DIR);
+  }
 });

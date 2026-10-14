@@ -510,28 +510,66 @@ def check_runtime() -> list[Finding]:
                 "runtime.port", INFO,
                 f"port {port} is free", f"{who} is not running"))
 
-    # An orphaned opencode service keeps answering with an empty session list,
-    # which looks exactly like the bridge being broken.
+    # Servers, not orphans.
+    #
+    # An earlier version of this check looked for a `serve --service` process
+    # whose parent had died and called it an orphan to be killed. That is
+    # wrong, and it was wrong in the dangerous direction: the desktop app
+    # starts the shared server once and deliberately lets it outlive the app,
+    # so a dead parent is its normal state. SKILL.md says of this process
+    # "never kill it" - and the audit was telling people to `taskkill` it,
+    # which on this machine was the process serving the live conversation.
+    #
+    # What actually matters is how many there are, because that is what
+    # decides whether clients share a session:
+    #   0 - nothing to talk to
+    #   1 - healthy, whatever the parent situation looks like
+    #   2+ - clients have split, which is the documented failure
     if os.name == "nt":
         code, out_ps = _run(
             "powershell -NoProfile -Command "
             "\"Get-CimInstance Win32_Process -Filter \\\"Name='opencode-cli.exe'\\\" "
-            "| ForEach-Object { $_.ProcessId.ToString() + '|' + $_.ParentProcessId "
-            "+ '|' + $_.CreationDate }\"", timeout=90)
+            "| Where-Object { $_.CommandLine -match 'serve' } "
+            "| ForEach-Object { $_.ProcessId.ToString() + '|' + $_.ParentProcessId }\"",
+            timeout=90)
+        servers = []
         for line in out_ps.splitlines():
             parts = line.strip().split("|")
-            if len(parts) < 3 or not parts[1].isdigit():
-                continue
-            pid, ppid, started = int(parts[0]), int(parts[1]), parts[2]
-            code2, alive = _run(f"tasklist /FI \"PID eq {ppid}\"", timeout=30)
-            if "no tasks" in alive.lower() or not alive.strip():
-                out.append(Finding(
-                    "runtime.orphan", FAIL,
-                    f"orphaned opencode service (pid {pid})",
-                    f"its parent {ppid} is gone; it was started {started} and has "
-                    f"held the port ever since, serving empty session lists",
-                    f"taskkill /PID {pid} /F   # or reboot"))
+            if len(parts) >= 2 and parts[0].isdigit() and parts[1].isdigit():
+                servers.append((int(parts[0]), int(parts[1])))
+
+        if not servers:
+            out.append(Finding(
+                "runtime.server", FAIL,
+                "no OpenCode server is running",
+                "the bridge has nothing to attach to; /list will fail and "
+                "every message will time out",
+                "start the desktop app once, or run "
+                f'"{(NPM_BIN / "opencode.cmd")}" serve'))
+        elif len(servers) == 1:
+            pid, ppid = servers[0]
+            out.append(Finding(
+                "runtime.server", INFO,
+                f"one shared OpenCode server (pid {pid})",
+                f"parent {ppid}"
+                + (" - already gone, which is normal: the desktop starts this "
+                   "server once and lets it outlive the app. Do not kill it."
+                   if not _pid_alive(ppid) else "")))
+        else:
+            listed = ", ".join(str(p) for p, _ in servers)
+            out.append(Finding(
+                "runtime.server", FAIL,
+                f"{len(servers)} OpenCode servers are running ({listed})",
+                "clients have split: each server has its own session view, so "
+                "the desktop and Telegram stop seeing each other's work",
+                "close every OpenCode window, then start the desktop app once"))
+
     return out
+
+
+def _pid_alive(pid: int) -> bool:
+    code, out = _run(f'tasklist /FI "PID eq {pid}"', timeout=30)
+    return code == 0 and str(pid) in out and "no tasks" not in out.lower()
 
 
 # ── 6b. version skew between the desktop and the CLI ──────────────────────
@@ -558,40 +596,38 @@ def check_version_skew() -> list[Finding]:
     except Exception as e:                                       # noqa: BLE001
         return [Finding("skew.check", WARN, "skew checker unavailable", str(e))]
 
-    desktop = desktop = deps._installed_desktop()
-    cli = deps._installed_npm("@opencode/cli")
+    copies = deps.opencode_copies()
 
-    if not desktop:
-        return out        # CLI-only host: nothing to skew against
-    if not cli:
-        out.append(Finding(
-            "skew.desktop_cli", FAIL,
-            "the desktop app has no npm CLI to pair with",
-            f"desktop bundles {desktop}; the bridge needs a separate "
-            f"`@opencode/cli` on PATH and there is none",
-            "npm install -g @opencode/cli"))
+    if len(copies) < 2:
+        return out        # nothing to compare: CLI-only host
+
+    versions = sorted(set(copies.values()))
+    if len(versions) == 1:
         return out
 
-    if desktop == cli:
-        return out
+    where = ", ".join(f"{k} {v}" for k, v in sorted(copies.items()))
+    tuples = [deps.version_tuple(v) for v in versions]
+    line_differs = len({t[:2] for t in tuples}) > 1
+    newest = max(tuples)
 
-    d, c = deps.version_tuple(desktop), deps.version_tuple(cli)
-    line_differs = d[:2] != c[:2]
-    higher = "desktop" if d > c else "CLI"
+    names = [k for k, v in copies.items() if deps.version_tuple(v) == newest]
+    behind = [f"{k} {v}" for k, v in copies.items()
+              if deps.version_tuple(v) != newest]
 
     out.append(Finding(
         "skew.desktop_cli",
         FAIL if line_differs else WARN,
-        f"desktop CLI {desktop} and npm CLI {cli} disagree",
-        f"the {higher} is newer. Both open "
-        f"{HOME / '.local' / 'share' / 'opencode' / 'opencode.db'}; a "
-        f"version that does not understand another's arguments prints its "
-        f"help and exits 1, and that looks like a missing feature, not a "
-        f"version problem",
-        f"npm install -g @opencode/cli"
-        if d > c else
-        f"update the desktop app, or pin the npm CLI to {desktop} with "
-        f"`npm install -g @opencode/cli@{desktop}`"))
+        "opencode copies disagree: " + where,
+        f"the newest is {names[0]}; behind it: {', '.join(behind) or 'none'}. "
+        f"They all open {HOME / '.local' / 'share' / 'opencode' / 'opencode.db'}. "
+        f"A version that does not understand another's arguments prints its "
+        f"help and exits 1, which reads as a missing feature rather than as "
+        f"a version problem",
+        f"npm install -g @opencode/cli   # brings the bridge up to "
+        f"{newest[0]}.{newest[1]}.{newest[2]}"
+        if any("npm" in b for b in behind) else
+        f"update the desktop app, or pin the npm CLI to "
+        f"{versions[-1]} with `npm install -g @opencode/cli@{versions[-1]}`"))
     return out
 
 

@@ -258,6 +258,59 @@ def _latest_pip(pkg: str) -> str | None:
     return None
 
 
+def desktop_runtime_cli() -> str | None:
+    """Version of the CLI the desktop is actually running right now.
+
+    The desktop keeps a third copy under %APPDATA%\\ai.opencode.desktop\\cli\\
+    in a directory named after the version, and that is the binary the live
+    `serve --service` process was started from - not the one bundled in
+    resources\\. Reading only resources\\ means checking a copy that may
+    never execute, which is how a skew check comes to report agreement
+    between two binaries while the running one is somewhere else entirely.
+
+    Falls back to the resources copy if this layout is not present, so a
+    different install style still gets checked rather than skipped.
+    """
+    import glob
+    import os
+    base = os.path.join(os.environ.get("APPDATA", ""), "ai.opencode.desktop", "cli")
+    for d in sorted(glob.glob(os.path.join(base, "*")), reverse=True):
+        exe = os.path.join(d, "opencode-cli.exe")
+        if not os.path.exists(exe):
+            continue
+        m = re.match(r"(\d+\.\d+\.\d+)", os.path.basename(d))
+        if m:
+            return m.group(1)
+        code, out = _run(f'"{exe}" --version', timeout=60)
+        v = re.search(r"v?(\d+\.\d+\.\d+)", out)
+        if v:
+            return v.group(1)
+    return None
+
+
+def opencode_copies() -> dict[str, str]:
+    """Every opencode CLI on this machine, and the version each one is.
+
+    Three copies coexist by design and none of them is optional:
+      npm       what cc-connect and the shim invoke
+      desktop   the binary shipped in the app's resources
+      runtime   the versioned copy in %APPDATA% the live server runs from
+    They are updated by three different schedules. A skew check that looks
+    at only two of them is a check that can be right for the wrong reason.
+    """
+    out: dict[str, str] = {}
+    v = _installed_npm("@opencode/cli")
+    if v:
+        out["npm CLI"] = v
+    v = _installed_desktop()
+    if v:
+        out["desktop bundle"] = v
+    v = desktop_runtime_cli()
+    if v:
+        out["desktop runtime"] = v
+    return out
+
+
 def _installed_handy() -> str | None:
     import os
     exe = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Handy", "handy.exe")
