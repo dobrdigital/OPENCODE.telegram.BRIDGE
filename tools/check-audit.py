@@ -82,8 +82,13 @@ EXPECT_CONFIG = [
 ]
 
 
-def run_audit(home: pathlib.Path, appdata: pathlib.Path, only: str) -> list[dict]:
-    env = dict(os.environ, USERPROFILE=str(home), APPDATA=str(appdata))
+def run_audit(home: pathlib.Path, appdata: pathlib.Path | None, only: str) -> list[dict]:
+    # appdata=None means inherit. Overriding it also moves npm's global
+    # prefix, which makes every npm package look uninstalled - the first
+    # version of this test passed for entirely the wrong reason because of it.
+    env = dict(os.environ, USERPROFILE=str(home))
+    if appdata is not None:
+        env["APPDATA"] = str(appdata)
     env.pop("PYTHONIOENCODING", None)
     r = subprocess.run(
         [sys.executable, str(ROOT / "tools" / "audit.py"),
@@ -162,6 +167,59 @@ def main() -> int:
 
         (home / ".cc-connect" / "config.toml").write_text(
             BROKEN_CONFIG, encoding="utf-8")
+
+        # ---- version skew --------------------------------------------
+        # The desktop ships and upgrades its own CLI on a different schedule
+        # from the npm one, so this gap opens on its own. A fake desktop at a
+        # deliberately incompatible version is the only honest way to prove
+        # the check is more than a quiet pass.
+        local = tmp / "localappdata"
+        res = local / "Programs" / "@opencodedesktop" / "resources"
+        res.mkdir(parents=True)
+        (res / "opencode-cli.version").write_text("1.19.0\n", encoding="utf-8")
+
+        env_backup = os.environ.get("LOCALAPPDATA")
+        os.environ["LOCALAPPDATA"] = str(local)
+        try:
+            skew = run_audit(home, None, "skew")
+        finally:
+            if env_backup is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = env_backup
+
+        sk = [f for f in skew if f["check"] == "skew.desktop_cli"]
+        # Assert on the wording, not just the severity: "no npm CLI to pair
+        # with" is also a FAIL and would have satisfied a looser test while
+        # proving nothing about version comparison.
+        ok = bool(sk) and sk[0]["severity"] == "FAIL" and "disagree" in sk[0]["title"]
+        detail = sk[0]["title"] if sk else "nothing reported"
+        print(f"  {'OK  ' if ok else 'FAIL'}  {'skew.desktop_cli':22} "
+              f"1.19.0 desktop vs 2.x CLI -> FAIL ({detail})")
+        if not ok:
+            for f in skew:
+                print(f"        {f['check']} / {f['severity']}: {f['title']}")
+            failures += 1
+
+        # A patch-only gap is a warning, not a failure. Asserted separately
+        # because collapsing both into FAIL would train people to ignore it.
+        (res / "opencode-cli.version").write_text("2.0.27\n", encoding="utf-8")
+        os.environ["LOCALAPPDATA"] = str(local)
+        try:
+            patch_skew = run_audit(home, None, "skew")
+        finally:
+            if env_backup is None:
+                os.environ.pop("LOCALAPPDATA", None)
+            else:
+                os.environ["LOCALAPPDATA"] = env_backup
+        pk = [f for f in patch_skew if f["check"] == "skew.desktop_cli"]
+        ok = bool(pk) and pk[0]["severity"] == "WARN" and "disagree" in pk[0]["title"]
+        print(f"  {'OK  ' if ok else 'FAIL'}  {'skew (patch only)':22} "
+              f"a patch gap is a WARN, not a FAIL")
+        if not ok:
+            for f in patch_skew:
+                print(f"        {f['check']} / {f['severity']}: {f['title']}")
+            failures += 1
 
         # ---- shim group ---------------------------------------------
         shim = run_audit(home, appdata, "shim")

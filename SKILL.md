@@ -45,6 +45,7 @@ writes, installs, stops or repairs anything.
 | `shim` | both npm launchers — `opencode.cmd` **and** the extensionless `opencode` — routed through the shim |
 | `task` | registered, correct working directory, shim delay strictly before the bridge delay |
 | `runtime` | port occupancy and orphaned `opencode-cli.exe serve --service` whose parent has died |
+| `skew` | the desktop app's bundled CLI against the npm CLI, which share one database |
 | `drift` | repository against the live install |
 
 `python tools\check-audit.py` proves the audit fires at all. That test exists because "no mismatches"
@@ -132,6 +133,25 @@ other.
 ## Step 1 — Confirm desktop and CLI already share one server
 
 Do this **before** touching cc-connect. If it fails, nothing downstream will behave.
+
+First the versions, because they drift on their own. The desktop app is an
+Electron application that ships its own `opencode-cli.exe` and upgrades it on
+its own schedule; the npm CLI moves only when a person runs
+`npm install -g @opencode/cli`. Both open the same database.
+
+```powershell
+python tools\audit.py --only skew
+
+# or by hand
+Get-Content "$env:LOCALAPPDATA\Programs\@opencodedesktop\resources\opencode-cli.version"
+opencode --version
+```
+
+A major or minor difference is the case that cost sessions before, because a
+version that does not understand another's arguments prints its help and exits
+1 — which reads as a missing feature. A patch difference is usually harmless.
+
+Then the processes:
 
 ```powershell
 Get-CimInstance Win32_Process |

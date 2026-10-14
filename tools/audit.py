@@ -534,6 +534,67 @@ def check_runtime() -> list[Finding]:
     return out
 
 
+# ── 6b. version skew between the desktop and the CLI ──────────────────────
+
+def check_version_skew() -> list[Finding]:
+    """The desktop app and the npm CLI open the same database.
+
+    The desktop ships its own opencode-cli.exe and upgrades it on its own
+    schedule. The npm one only moves when a person runs `npm install -g`. So
+    they drift without anybody deciding to let them, and the symptom is
+    silent: a version that does not understand another's arguments prints
+    its help text and exits 1, and a database written by one line of the
+    2.x series may not be readable by the other.
+
+    Severity follows the shape of the gap. A major or minor difference means
+    different code lines, which is the case that destroyed sessions before -
+    that is a FAIL. A patch difference is probably harmless, so it is a WARN
+    and the fix is to catch up rather than to panic.
+    """
+    out: list[Finding] = []
+    try:
+        sys.path.insert(0, str(ROOT / "tools"))
+        import deps                                              # noqa: PLC0415
+    except Exception as e:                                       # noqa: BLE001
+        return [Finding("skew.check", WARN, "skew checker unavailable", str(e))]
+
+    desktop = desktop = deps._installed_desktop()
+    cli = deps._installed_npm("@opencode/cli")
+
+    if not desktop:
+        return out        # CLI-only host: nothing to skew against
+    if not cli:
+        out.append(Finding(
+            "skew.desktop_cli", FAIL,
+            "the desktop app has no npm CLI to pair with",
+            f"desktop bundles {desktop}; the bridge needs a separate "
+            f"`@opencode/cli` on PATH and there is none",
+            "npm install -g @opencode/cli"))
+        return out
+
+    if desktop == cli:
+        return out
+
+    d, c = deps.version_tuple(desktop), deps.version_tuple(cli)
+    line_differs = d[:2] != c[:2]
+    higher = "desktop" if d > c else "CLI"
+
+    out.append(Finding(
+        "skew.desktop_cli",
+        FAIL if line_differs else WARN,
+        f"desktop CLI {desktop} and npm CLI {cli} disagree",
+        f"the {higher} is newer. Both open "
+        f"{HOME / '.local' / 'share' / 'opencode' / 'opencode.db'}; a "
+        f"version that does not understand another's arguments prints its "
+        f"help and exits 1, and that looks like a missing feature, not a "
+        f"version problem",
+        f"npm install -g @opencode/cli"
+        if d > c else
+        f"update the desktop app, or pin the npm CLI to {desktop} with "
+        f"`npm install -g @opencode/cli@{desktop}`"))
+    return out
+
+
 # ── 7. repository vs live install ────────────────────────────────────────
 
 def check_drift() -> list[Finding]:
@@ -581,6 +642,7 @@ CHECKS = [
     ("shim", check_shim),
     ("task", check_tasks),
     ("runtime", check_runtime),
+    ("skew", check_version_skew),
     ("drift", check_drift),
 ]
 

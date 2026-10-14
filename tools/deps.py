@@ -88,6 +88,18 @@ DEPS = [
         safe_auto=False,   # system-wide, often needs elevation
     ),
     Dep(
+        key="opencode-desktop",
+        label="OpenCode desktop",
+        kind="desktop",
+        pkg="@opencodedesktop",
+        install="https://opencode.ai/download",
+        required=False,
+        why="shares one database with the CLI. Its bundled CLI updates "
+            "itself with the app; the npm one only when someone runs "
+            "`npm i -g @opencode/cli`. They drift apart on their own.",
+        safe_auto=False,
+    ),
+    Dep(
         key="handy",
         label="Handy",
         kind="manual",
@@ -123,9 +135,8 @@ def _installed_npm(pkg: str) -> str | None:
     code, out = _run(f"npm ls -g {pkg} --depth=0 --json")
     if code != 0:
         return None
-    try:
-        data = json.loads(out[out.find("{"):])
-    except json.JSONDecodeError:
+    data = _json_from(out)
+    if data is None:
         return None
     for name, entry in (data.get("dependencies") or {}).items():
         if name == pkg:
@@ -133,12 +144,40 @@ def _installed_npm(pkg: str) -> str | None:
     return None
 
 
+def _json_from(text: str) -> dict | None:
+    """Pull the first JSON object out of a command's output, ignoring the rest.
+
+    npm interleaves notices with its results - 'npm notice New major version
+    of npm available! 11.16.0 -> 12.2.0' lands after the JSON on some runs
+    and not others. Parsing the whole buffer therefore fails intermittently,
+    and the failure is silent: the package reads as not installed on a machine
+    where it is installed, which is worse than no check at all because it
+    teaches people to ignore the report.
+
+    raw_decode stops at the end of the first value instead of demanding the
+    stream end there.
+    """
+    i = text.find("{")
+    if i < 0:
+        return None
+    try:
+        value, _ = json.JSONDecoder().raw_decode(text[i:])
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
 def _latest_npm(pkg: str) -> str | None:
     code, out = _run(f"npm view {pkg} version")
     if code != 0:
         return None
-    v = out.strip().splitlines()[-1].strip() if out.strip() else ""
-    return v if re.match(r"^[\w.\-+]+$", v) else None
+    # Same trailing-notice problem as npm ls: take the first line that looks
+    # like a version rather than trusting the last line of the buffer.
+    for line in out.strip().splitlines():
+        v = line.strip()
+        if re.match(r"^\d+\.\d+\.\d+", v):
+            return v
+    return None
 
 
 def sys_executable() -> str:
@@ -225,6 +264,52 @@ def _installed_handy() -> str | None:
     return "installed" if os.path.exists(exe) else None
 
 
+def desktop_root() -> str | None:
+    """Locate the Electron desktop app, or None if it is not installed.
+
+    An npm package named `opencode-desktop` also exists. It is not this, and
+    reading a version out of the wrong one would report a skew that does not
+    exist - so the directory name has to match exactly.
+    """
+    import os
+    base = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs")
+    for cand in (os.path.join(base, "@opencodedesktop"),
+                 os.path.join(base, "opencode-desktop")):
+        if os.path.isdir(cand):
+            return cand
+    return None
+
+
+def _installed_desktop() -> str | None:
+    """The version of the CLI the desktop app ships, not the app's own.
+
+    `resources/opencode-cli.version` is a one-line file written by the build.
+    It is the honest number to compare against the npm CLI, because that
+    binary is what opens the shared database.
+
+    Reading the app's version instead would let 2.0.28 desktop bundle a
+    2.0.29 CLI and still report agreement.
+    """
+    import os
+    root = desktop_root()
+    if not root:
+        return None
+    vf = os.path.join(root, "resources", "opencode-cli.version")
+    try:
+        with open(vf, encoding="utf-8", errors="replace") as fh:
+            return fh.read().strip().lstrip("v") or None
+    except OSError:
+        pass
+    # Fall back to asking the binary, which is slower but authoritative.
+    exe = os.path.join(root, "resources", "opencode-cli.exe")
+    if os.path.exists(exe):
+        code, out = _run(f'"{exe}" --version', timeout=60)
+        m = re.search(r"v?(\d+\.\d+\.\d+)", out)
+        if m:
+            return m.group(1)
+    return None
+
+
 def _installed_winget(product_id: str) -> tuple[str | None, str | None]:
     code, out = _run(f'winget list --id {product_id} --exact --accept-source-agreements')
     if code != 0:
@@ -248,6 +333,13 @@ def probe(dep: Dep) -> Dep:
         elif dep.kind == "manual" and dep.key == "handy":
             dep.current = _installed_handy()
             dep.latest = dep.current   # no registry to query; presence is all there is
+        elif dep.kind == "desktop":
+            dep.current = _installed_desktop()
+            # The desktop ships its own CLI and updates it to whatever the app
+            # shipped with, so "newest" is not the registry's number - it is
+            # whatever this host's app was built with. The skew check compares
+            # the two against each other instead.
+            dep.latest = dep.current
     except Exception as e:                                   # noqa: BLE001
         dep.notes.append(f"probe failed: {type(e).__name__}")
     return dep
