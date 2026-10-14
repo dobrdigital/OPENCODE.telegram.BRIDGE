@@ -114,9 +114,69 @@ def main() -> int:
     report(not (ROOT / "config.toml").exists(), "no config.toml in the repo")
     report(not (ROOT / "service.json").exists(), "no service.json in the repo")
 
+    check_state_keys(report)
+
     print()
     print("failures:", failures)
     return 1 if failures else 0
+
+
+def check_state_keys(report) -> None:
+    """Every state key setup.py reads must be one it was actually given.
+
+    step_dependencies builds `state` from Dep.key, and the later steps look
+    values up by hand-written string. Nothing checks the two spellings
+    agree, and nothing would complain if they did not: dict.get on a missing
+    key returns None, and None reads as "not installed".
+
+    That is exactly what happened. deps.py calls the package `edge-tts` while
+    step_tts asked for `edge_tts`, so voice output could never be enabled and
+    the installer reported edge-tts as missing on a machine where it was
+    installed. Step 1 said OK, step 7 said it was not there, and neither
+    looked like a bug.
+    """
+    import ast
+
+    print("== installer state keys ==")
+    sys.path.insert(0, str(ROOT / "tools"))
+    try:
+        import deps                                              # noqa: PLC0415
+        dep_keys = {d.key for d in deps.DEPS}
+    except Exception as e:                                       # noqa: BLE001
+        report(False, "dependency table loads", str(e))
+        return
+
+    src = (ROOT / "setup.py").read_text(encoding="utf-8")
+    tree = ast.parse(src)
+
+    read: set[str] = set()
+    written: set[str] = set()
+    for node in ast.walk(tree):
+        # state.get("x") and state["x"]
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+                and node.func.attr == "get" and node.args \
+                and isinstance(node.args[0], ast.Constant):
+            base = node.func.value
+            if isinstance(base, ast.Name) and base.id == "state":
+                read.add(node.args[0].value)
+        if isinstance(node, ast.Subscript) and isinstance(node.value, ast.Name) \
+                and node.value.id == "state" and isinstance(node.slice, ast.Constant):
+            key = node.slice.value
+            ctx = node.ctx
+            if isinstance(ctx, ast.Store):
+                written.add(key)
+            elif isinstance(ctx, ast.Load):
+                read.add(key)
+
+    known = dep_keys | written
+    unknown = sorted(read - known)
+    report(not unknown,
+           "every state key the installer reads exists",
+           f"unknown: {unknown}" if unknown else
+           f"reads {len(read)}, table declares {len(dep_keys)}")
+
+    for key in sorted(read & dep_keys):
+        report(True, f"  {key} comes from the dependency table")
 
 
 if __name__ == "__main__":

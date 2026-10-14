@@ -81,6 +81,12 @@ jobs:
       - name: the audit fires when something is wrong
         run: python tools\check-audit.py
 
+      - name: every installer step explains itself
+        run: python tools\check-steps.py
+        # A step with a heading and no reason is indistinguishable from a
+        # cosmetic one, and the person running the installer has no way to
+        # tell a load-bearing question from a formality.
+
       - name: repo carries no caches or build leftovers
         run: python tools\audit.py --only repo
         # On a clean checkout this group is silent by definition. On a

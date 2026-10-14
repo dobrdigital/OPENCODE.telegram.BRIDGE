@@ -133,6 +133,22 @@ def info(text: str) -> None:
     print(f"        {_c(text, DIM)}")
 
 
+def why(text: str) -> None:
+    """One short sentence on what the step is for, and what breaks without it.
+
+    Every step gets one of these. The person running the installer is being
+    asked for a token, a directory and a model, so the reason has to fit
+    between the heading and the question without pushing the question off the
+    screen - a wall of prose here is prose nobody reads. Kept to one or two
+    lines, and concrete: "verify your setup" helps nobody, "OpenCode exits 1
+    on a flag it does not recognise, so an out-of-date copy looks exactly
+    like a missing feature" does.
+    """
+    import textwrap
+    for line in textwrap.wrap(text, 68):
+        print(f"  {_c(line, DIM)}")
+
+
 def rule(char: str = "-", width: int = 64) -> str:
     return char * width
 
@@ -183,6 +199,11 @@ def step_dependencies() -> dict:
     silently running an installer is how people lose trust in a setup wizard.
     """
     heading(f"[1/9] {_c('Checking dependencies', BOLD)}")
+    print()
+    why("OpenCode exits 1 on a flag it does not recognise instead of "
+        "saying so, so an out-of-date copy looks exactly like a missing "
+        "feature. Versions are read from the official registries, never "
+        "assumed here.")
     print()
 
     try:
@@ -338,6 +359,9 @@ def _pid_alive(pid: int) -> bool:
 def step_preflight() -> bool:
     heading(_c("Preflight", BOLD))
     print()
+    why("Confirms the ports are free and the disk has room, while nothing "
+        "has been written yet. Finding out afterwards costs a restart of "
+        "the bridge.")
 
     # ports the install depends on
     busy = []
@@ -407,6 +431,9 @@ def verify_token_against_telegram(token: str) -> tuple[bool, str]:
 def step_telegram(noninteractive: bool, token: str) -> str | None:
     heading(f"[2/9] {_c('Telegram bot', BOLD)}")
     print()
+    why("A wrong token does not stop the bridge - it starts and then says "
+        "nothing in the chat. So the token is checked against Telegram now.")
+    print()
     print("  The bridge talks to Telegram through a bot.")
     print("  Create one with @BotFather in Telegram, it will give you a token.")
     print()
@@ -445,9 +472,8 @@ def step_telegram(noninteractive: bool, token: str) -> str | None:
 def step_project(noninteractive: bool, project_dir: str) -> Path:
     heading(f"[3/9] {_c('Project directory', BOLD)}")
     print()
-    print("  OpenCode runs with this as its working directory. Sessions are")
-    print("  grouped by folder, so pick the real project - not a scratch dir,")
-    print("  or the desktop app will not show the session.")
+    why("Sessions are grouped by folder, so this decides whether the "
+        "desktop app ever shows the session this bridge creates.")
     print()
 
     default = (project_dir or str(ROOT)).strip()
@@ -486,7 +512,9 @@ def step_project(noninteractive: bool, project_dir: str) -> Path:
 def step_model(noninteractive: bool, state: dict) -> tuple[str, list[str]]:
     heading(f"[4/9] {_c('Model', BOLD)}")
     print()
-    print("  Free models from the opencode gateway. No API key required.")
+    why("Free gateway models, no API key. The default is written to "
+        "opencode.jsonc rather than here: a model pinned in the bridge "
+        "config silently breaks /model switch in chat.")
     print()
 
     code, out = run("opencode models", timeout=180)
@@ -523,8 +551,8 @@ def step_model(noninteractive: bool, state: dict) -> tuple[str, list[str]]:
 def step_name(noninteractive: bool, project: Path, name: str) -> str:
     heading(f"[5/9] {_c('Session name', BOLD)}")
     print()
-    print("  Labels this bridge's session. Used by cc-connect -p and by")
-    print("  /new, so it shows up in cron and relay commands.")
+    why("Labels the session for cc-connect -p, /new and the cron and relay "
+        "commands. Renaming it later leaves the old session orphaned.")
     print()
     default = name or re.sub(r"[^A-Za-z0-9_-]+", "-", project.name).strip("-") or "cc-connect"
     while True:
@@ -537,6 +565,9 @@ def step_name(noninteractive: bool, project: Path, name: str) -> str:
 
 def step_voice(state: dict) -> tuple[bool, bool]:
     heading(f"[6/9] {_c('Voice input', BOLD)}  {_c('(speech to text)', DIM)}")
+    print()
+    why("Runs entirely on this machine through Handy, so voice never "
+        "leaves it. Needs Handy plus one downloaded model before it works.")
     print()
 
     if not state.get("handy"):
@@ -557,10 +588,12 @@ def step_voice(state: dict) -> tuple[bool, bool]:
 def step_tts(state: dict) -> bool:
     heading(f"[7/9] {_c('Voice output', BOLD)}  {_c('(text to speech)', DIM)}")
     print()
-    print("  provider 'edge' is Microsoft's endpoint. No API key, no cost.")
+    why("The 'edge' provider is Microsoft's endpoint - no key, no cost - "
+        "but it shells out to a separate program, edge-tts. Left off by "
+        "default: replies stay voice-only until you ask for them.")
     print()
 
-    if not state.get("edge_tts"):
+    if not state.get("edge-tts"):
         no("edge-tts not installed - run: pip install edge-tts")
         return False
 
@@ -571,10 +604,9 @@ def step_tts(state: dict) -> bool:
 def step_autostart_question() -> bool:
     heading(f"[8/9] {_c('Autostart at logon', BOLD)}")
     print()
-    print("  Two scheduled tasks so the bridge and the voice shim come back")
-    print("  after a reboot. The shim starts first (15s), the bridge second")
-    print("  (20s), so a voice message cannot arrive before the thing that")
-    print("  transcribes it is listening.")
+    why("Two scheduled tasks bring everything back after a reboot. The shim "
+        "starts at 15s and the bridge at 20s, so a voice message cannot "
+        "arrive before the thing that transcribes it is listening.")
     print()
     return ask_yes_no("start them automatically after login?", default=True)
 
@@ -582,6 +614,10 @@ def step_autostart_question() -> bool:
 def step_write(args, project: Path, session_name: str, token: str | None,
                model: str, stt: bool, tts: bool) -> Path:
     heading(f"[9/9] {_c('Writing configuration', BOLD)}")
+    print()
+    why("cc-connect reads config.toml once at startup, so it has to be "
+        "right before anything launches. It is read back afterwards and "
+        "compared against your answers; a mismatch rolls the write back.")
     print()
 
     template = ROOT / "config.example.toml"
@@ -726,8 +762,8 @@ def step_write(args, project: Path, session_name: str, token: str | None,
 def step_install_shim() -> None:
     heading(_c("Installing the OpenCode compatibility shim", BOLD))
     print()
-    print("  cc-connect 1.5.0 calls opencode in ways 2.0.28 rejects. Without")
-    print("  this step /list fails with a bare 'exit status 1'.")
+    why("cc-connect 1.5.0 calls opencode in ways 2.0.28 rejects. Without "
+        "this, /list fails with a bare 'exit status 1' and no explanation.")
     print()
     script = ROOT / "opencode-shim" / "install-npm-shim.ps1"
     if not script.exists():
@@ -746,6 +782,10 @@ def step_install_shim() -> None:
 
 def step_autostart(enable: bool) -> None:
     heading(_c("Autostart at logon", BOLD))
+    print()
+    why("Registers the two tasks agreed on earlier, each pointed at the "
+        "directory it must run in. The working directory is what makes them "
+        "work at all - without it they fail silently at logon.")
     print()
     if not enable:
         info("skipped")
@@ -769,6 +809,10 @@ def step_autostart(enable: bool) -> None:
 
 def step_verify(fresh: bool) -> None:
     heading(_c("Verifying", BOLD))
+    print()
+    why("Checks what was actually written, not what was intended, and runs "
+        "a live round-trip through the voice path. Only a real reboot still "
+        "proves the logon trigger itself.")
     print()
     test = ROOT / "autostart-test.ps1"
     if not test.exists():
@@ -812,6 +856,10 @@ def step_audit() -> int:
     already been changed behind the person's back.
     """
     heading(_c("Final check", BOLD))
+    print()
+    why("Covers what no single step can see on its own: both npm launchers, "
+        "task working directories, orphaned processes, repository drift. It "
+        "only reads, and prints the command that fixes each line.")
     print()
 
     audit = ROOT / "tools" / "audit.py"
