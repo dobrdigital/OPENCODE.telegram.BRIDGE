@@ -609,9 +609,8 @@ def check_runtime() -> list[Finding]:
                 "it is running but its view of the database is behind. "
                 "`/list` in the chat comes back empty and looks like a "
                 "misconfigured bridge rather than a stale process",
-                "restart the OpenCode server - not the bridge, and not the "
-                "machine. Close every OpenCode window, then run: "
-                "opencode-cli.exe serve --service"))
+                f"restart the OpenCode server - not the bridge, and not the "
+                f"machine:\n         powershell -File \"{ROOT / 'restart-server.ps1'}\""))
         elif standalone == 0 and via_service == 0:
             out.append(Finding(
                 "runtime.sessions", INFO,
@@ -793,7 +792,6 @@ def check_sessions() -> list[Finding]:
             "  from session_v2 s order by 2 asc limit 400"
         ).fetchall()
         total = con.execute("select count(*) from session_v2").fetchone()[0]
-        con.close()
     except Exception as e:                                   # noqa: BLE001
         return [Finding("sessions.read", WARN,
                         "could not read the session database",
@@ -815,6 +813,54 @@ def check_sessions() -> list[Finding]:
             f"{shown}{more}",
             f"remove them in the desktop app, or "
             f"opencode session delete <id> - this tool deletes nothing"))
+
+    out.extend(_check_projects(con))
+    return out
+
+
+def _check_projects(con) -> list[Finding]:
+    """Report directories registered more than once, and test-run leftovers.
+
+    A duplicate is worth knowing about because sessions are counted per
+    project, so two rows for one directory mean a query that resolves to the
+    wrong row sees none of them.
+
+    It is NOT claimed to be the cause of the empty `/list`: the server log
+    points at the populated row. It is a real anomaly on its own, and saying
+    so plainly is better than a tidy story that turns out to be wrong.
+    """
+    out: list[Finding] = []
+    try:
+        dupes = con.execute(
+            "select p.worktree, count(*) rows, sum("
+            "  (select count(*) from session_v2 s where s.project_id = p.id)"
+            ") as total"
+            "  from project p group by p.worktree having count(*) > 1"
+        ).fetchall()
+        leftovers = con.execute(
+            "select count(*) from project p where p.worktree like '%cc-shim-contract%'"
+            "   or p.worktree like '%\\tmp.%' or p.worktree like '%\\opencode'"
+        ).fetchone()[0]
+    except Exception:                                          # noqa: BLE001
+        return out
+
+    for worktree, _rows, sess in dupes:
+        out.append(Finding(
+            "sessions.duplicate_project", WARN,
+            f"{worktree} is registered {_rows} times",
+            f"{sess} session(s) in total across those rows; a lookup that "
+            f"resolves to the other one sees none of them",
+            f"this tool changes nothing. The rows are visible with: "
+            f"sqlite3 \"{HOME / '.local' / 'share' / 'opencode' / 'opencode.db'}\" "
+            f"\"select id, worktree from project\""))
+
+    if leftovers:
+        out.append(Finding(
+            "sessions.test_projects", INFO,
+            f"{leftovers} project row(s) left by test runs",
+            "each contract-test run registered its temporary directory as a "
+            "project. They accumulate even though the sessions are deleted",
+            f"remove them in the desktop app if the list is noisy"))
     return out
 
 

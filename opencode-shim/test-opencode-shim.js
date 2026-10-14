@@ -41,9 +41,21 @@ const REAL_BIN =
 // placeholder path would silently exercise a different code path than the one
 // being tested. Default to a throwaway directory rather than a machine path,
 // which is also what keeps this file publishable.
+//
+// It must be a STABLE directory, not a fresh mkdtemp each run. Every
+// directory OpenCode is pointed at gets a permanent row in the project table
+// of the production database, and there is no CLI command that removes one -
+// `opencode project` does not exist. Deleting the session cleans up half of
+// what a test leaves behind and none of the other half, so a throwaway name
+// per run turns the leak from one row into one row per run forever.
+// Measured here: 7 rows had already piled up this way.
 const CC_WORK_DIR = fs.existsSync(process.env.CC_WORK_DIR || '')
   ? process.env.CC_WORK_DIR
-  : fs.mkdtempSync(path.join(os.tmpdir(), 'cc-shim-contract-'));
+  : (() => {
+      const stable = path.join(os.tmpdir(), 'cc-shim-contract');
+      fs.mkdirSync(stable, { recursive: true });
+      return stable;
+    })();
 
 // Contract tests exercise the REAL OpenCode binary. CI has no OpenCode
 // installed, so skip rather than fail: a red build on a missing dependency
