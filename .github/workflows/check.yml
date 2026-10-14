@@ -26,6 +26,9 @@ jobs:
       - name: the installer writes what it was asked
         run: python tools\check-setup-writes.py
 
+      - name: the installer refuses to leave a bad config behind
+        run: python tools\check-setup-rollback.py
+
       - name: no secrets committed
         shell: pwsh
         run: |

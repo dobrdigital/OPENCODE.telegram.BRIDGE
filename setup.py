@@ -27,9 +27,29 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
-import tomllib
-from pathlib import Path
+
+# ── hard prerequisite, checked before anything else ────────────────────────
+# tomllib is 3.11+. Importing it unguarded turns an old Python into a bare
+# ImportError traceback, which tells a first-time user nothing. Check before
+# the import so this is the message they actually see.
+if sys.version_info < (3, 11):
+    sys.stderr.write(
+        "\n"
+        "  setup.py needs Python 3.11 or newer.\n"
+        f"  You have {sys.version_info.major}.{sys.version_info.minor}.\n"
+        "\n"
+        "  Install a newer one, then run this again:\n"
+        "      winget install Python.Python.3.12\n"
+        "\n"
+        "  The bridge itself does not need 3.11 - only this installer does,\n"
+        "  because it reads back the TOML it wrote to verify it.\n\n"
+    )
+    raise SystemExit(1)
+
+import tomllib                                                    # noqa: E402
+from pathlib import Path                                          # noqa: E402
 
 ROOT = Path(__file__).resolve().parent
 HOME = Path(os.environ.get("USERPROFILE", str(Path.home())))
@@ -208,6 +228,137 @@ def step_prereqs() -> dict:
     return state
 
 
+def acquire_lock():
+    """Refuse a second concurrent run.
+
+    Two installers writing ~/.cc-connect at once produce a config that is
+    half of each, and the symptom appears later in a file nobody is looking at.
+    """
+    lock = BRIDGE_DIR / ".setup.lock"
+    try:
+        BRIDGE_DIR.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        try:
+            pid = int(lock.read_text(encoding="utf-8").strip() or "0")
+            age = time.time() - lock.stat().st_mtime
+        except (ValueError, OSError):
+            pid, age = 0, 0
+        if pid and _pid_alive(pid):
+            print()
+            no(f"another setup.py is already running (PID {pid})")
+            info("wait for it to finish, or delete this file if it crashed:")
+            info(f"  {lock}")
+            raise SystemExit(1)
+        if age < 600:
+            print()
+            no("a previous setup.py crashed less than 10 minutes ago")
+            info("its lock file may still be there:")
+            info(f"  {lock}")
+            if not ask_yes_no("continue anyway", default=False):
+                raise SystemExit(1)
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    os.write(fd, str(os.getpid()).encode())
+    os.close(fd)
+    return lock
+
+
+def release_lock(lock) -> None:
+    try:
+        if lock and lock.exists():
+            lock.unlink()
+    except OSError:
+        pass
+
+
+def _pid_alive(pid: int) -> bool:
+    if not IS_WIN:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    out = subprocess.run(
+        ["powershell", "-NoProfile", "-Command",
+         f"if (Get-Process -Id {pid} -ErrorAction SilentlyContinue) {{'y'}}"],
+        capture_output=True,
+    )
+    return b"y" in out.stdout
+
+
+def step_preflight() -> bool:
+    heading(_c("Preflight", BOLD))
+    print()
+
+    # ports the install depends on
+    busy = []
+    for port, who in ((8300, "GigaAM STT shim"), (9820, "cc-connect management")):
+        code, out = run(f"powershell -NoProfile -Command \""
+                        f"(Get-NetTCPConnection -State Listen -LocalPort {port} "
+                        f"-ErrorAction SilentlyContinue).Count\"", timeout=30)
+        count = out.strip().splitlines()[-1].strip() if out.strip() else "0"
+        if count.isdigit() and int(count) > 0:
+            warn(f"port {port} already in use ({who})")
+            busy.append(port)
+        else:
+            ok(f"port {port} free")
+
+    # disk: the speech model is a few hundred MB
+    try:
+        free = shutil.disk_usage(str(BRIDGE_DIR)).free
+        if free > 2 * 1024 ** 3:
+            ok(f"{free // 1024**3} GB free")
+        else:
+            warn(f"only {free // 1024**2} MB free - the speech model may not fit")
+    except OSError as e:
+        warn(f"could not check free space: {e}")
+
+    # a bridge that is already running will keep the old config until restarted
+    code, out = run("tasklist /FI \"IMAGENAME eq cc-connect.exe\"", timeout=30)
+    if "cc-connect.exe" in out:
+        warn("a cc-connect bridge is already running")
+        info("it will keep using the old config until restarted; re-run /restart afterwards")
+
+    if busy:
+        print()
+        no(f"ports in use: {', '.join(map(str, busy))}")
+        if not ask_yes_no("continue anyway", default=False):
+            return False
+    return True
+
+
+def verify_token_against_telegram(token: str) -> tuple[bool, str]:
+    """Ask Telegram who this bot is. A regex cannot catch a typo; the API can.
+
+    Returns (ok, detail). A network failure is reported as "could not check"
+    rather than "bad token" - refusing to install because the machine is
+    behind a firewall would be worse than the typo it guards against.
+    """
+    url = f"https://api.telegram.org/bot{token}/getMe"
+    try:
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        with urllib.request.urlopen(url, timeout=15) as r:
+            data = _json.loads(r.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False, "Telegram rejected it - the token is wrong or revoked"
+        return False, f"Telegram answered HTTP {e.code}"
+    except Exception as e:                                       # noqa: BLE001
+        return True, f"could not verify ({type(e).__name__}) - assuming it is right"
+
+    if not data.get("ok"):
+        return False, str(data.get("description", "rejected"))
+    bot = data.get("result", {}).get("username", "?")
+    return True, f"valid, bot is @{bot}"
+
+
 def step_telegram(noninteractive: bool, token: str) -> str | None:
     heading(f"[2/9] {_c('Telegram bot', BOLD)}")
     print()
@@ -227,14 +378,23 @@ def step_telegram(noninteractive: bool, token: str) -> str | None:
             if ask_yes_no("skip Telegram and set the bridge up without it", default=False):
                 return None
             continue
-        # 1234567890:AA... - validate the shape, then let the bot answer for itself
+        # 1234567890:AA... - shape first, then ask the API, because a regex
+        # cannot tell a valid token from one with a single wrong character.
         if not re.match(r"^\d{6,}:[A-Za-z0-9_-]{30,}$", value):
             warn("that does not look like a bot token (expected 123456789:AA...)")
             if ask_yes_no("use it anyway", default=False):
                 return value
             continue
-        ok("format looks right")
-        return value
+
+        print("        checking with Telegram...", flush=True)
+        good, detail = verify_token_against_telegram(value)
+        if good:
+            ok(f"token accepted ({detail})")
+            return value
+        no(f"Telegram rejected the token: {detail}")
+        if ask_yes_no("use it anyway", default=False):
+            return value
+        continue
 
 
 def step_project(noninteractive: bool, project_dir: str) -> Path:
@@ -406,7 +566,9 @@ def step_write(args, project: Path, session_name: str, token: str | None,
 
     BRIDGE_DIR.mkdir(parents=True, exist_ok=True)
     cfg = BRIDGE_DIR / "config.toml"
+    previous = None
     if cfg.exists():
+        previous = cfg.read_text(encoding="utf-8")
         stamp = str(int(time.time()))
         backup = BRIDGE_DIR / f"config.toml.before-setup-{stamp}.bak"
         shutil.copy2(cfg, backup)
@@ -415,39 +577,69 @@ def step_write(args, project: Path, session_name: str, token: str | None,
 
     # Silent regex substitution is how the wizard produced a wrong work_dir and
     # a flipped speech flag without a word. Verify every value actually landed.
-    written = tomllib.loads(cfg.read_text(encoding="utf-8"))
-    wp = written["projects"][0]
+    #
+    # The verification itself must not be able to throw. A renamed key used to
+    # raise KeyError halfway through, leaving the bad file on disk with no
+    # message at all. Failing to check counts as failing to verify.
     problems = []
 
-    def expect(cond: bool, msg: str) -> None:
-        if not cond:
-            problems.append(msg)
+    def rollback() -> None:
+        try:
+            if previous is not None:
+                cfg.write_text(previous, encoding="utf-8", newline="")
+                info("rolled back to the config that was there before")
+            else:
+                cfg.unlink()
+                info("removed the config we had just written")
+        except OSError as e:
+            no(f"rollback failed: {e}")
+            info(f"restore by hand from: {BRIDGE_DIR}")
 
-    expect(wp["name"] == session_name, f"session name is {wp['name']!r}, wanted {session_name!r}")
-    expect(Path(wp["agent"]["options"]["work_dir"]) == project,
-           f"work_dir is {wp['agent']['options']['work_dir']!r}, wanted {project.as_posix()!r}")
-    expect(wp["agent"]["options"]["cmd"] == ["opencode"],
-           f"cmd is {wp['agent']['options']['cmd']!r}, must be a bare binary")
-    expect(wp.get("reset_on_idle_mins") == 0, "reset_on_idle_mins must be 0")
+    try:
+        written = tomllib.loads(cfg.read_text(encoding="utf-8"))
+        wp = written["projects"][0]
+        opts = wp["agent"]["options"]
 
-    tts_on = bool(written.get("tts", {}).get("enabled"))
-    expect(tts_on == tts, f"tts.enabled is {tts_on}, wanted {tts}")
+        def expect(cond: bool, msg: str) -> None:
+            if not cond:
+                problems.append(msg)
 
-    stt_on = bool(written.get("speech", {}).get("enabled"))
-    expect(stt_on == stt, f"speech.enabled is {stt_on}, wanted {stt}")
+        expect(wp.get("name") == session_name,
+               f"session name is {wp.get('name')!r}, wanted {session_name!r}")
+        expect("work_dir" in opts,
+               "config has no work_dir key - the template and the wizard disagree")
+        if "work_dir" in opts:
+            expect(Path(opts["work_dir"]) == project,
+                   f"work_dir is {opts['work_dir']!r}, wanted {project.as_posix()!r}")
+        expect(opts.get("cmd") == ["opencode"],
+               f"cmd is {opts.get('cmd')!r}, must be a bare binary")
+        expect(wp.get("reset_on_idle_mins") == 0, "reset_on_idle_mins must be 0")
 
-    if token:
-        got = wp["platforms"][0]["options"]["token"]
-        expect(got == token, f"telegram token did not land (got {got[:12]}...)")
-    else:
-        expect("CHANGE-ME" not in cfg.read_text(encoding="utf-8"),
-               "a placeholder token was left in the config")
+        tts_on = bool(written.get("tts", {}).get("enabled"))
+        expect(tts_on == tts, f"tts.enabled is {tts_on}, wanted {tts}")
+
+        stt_on = bool(written.get("speech", {}).get("enabled"))
+        expect(stt_on == stt, f"speech.enabled is {stt_on}, wanted {stt}")
+
+        if token:
+            got = wp.get("platforms", [{}])[0].get("options", {}).get("token")
+            expect(got == token, f"telegram token did not land (got {str(got)[:12]}...)")
+        else:
+            expect("CHANGE-ME" not in cfg.read_text(encoding="utf-8"),
+                   "a placeholder token was left in the config")
+
+    except Exception as e:                                    # noqa: BLE001
+        problems.append(f"could not verify what was written: {type(e).__name__}: {e}")
 
     if problems:
         for p in problems:
             no(p)
         print()
-        no(f"{cfg} written but does NOT match your answers - review it before running")
+        # A half-written config is worse than no config: the bridge would start
+        # against it and fail somewhere unrelated. Put back what was there.
+        rollback()
+        print()
+        no(f"{cfg} did not match your answers - nothing was left in place")
         return False
 
     ok(f"{cfg}  (verified against your answers)")
@@ -604,8 +796,13 @@ def main() -> int:
     print(f"  {_c('interactive setup', DIM)}")
     print(rule("="))
 
+    lock = None
     try:
+        lock = acquire_lock()
         state = step_prereqs()
+        if not step_preflight():
+            info("stopping before anything was written")
+            return 1
         token = step_telegram(args.yes, args.token)
         project = step_project(args.yes, args.project_dir)
         model, live_models = step_model(args.yes, state)
@@ -676,8 +873,12 @@ def main() -> int:
     except KeyboardInterrupt:
         print()
         print()
-        warn("cancelled - nothing was written")
+        warn("cancelled")
         return 130
+    finally:
+        # Always drop the lock. A stale one would block the next run, and the
+        # next run is exactly what someone does after cancelling.
+        release_lock(lock)
 
 
 if __name__ == "__main__":
