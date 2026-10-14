@@ -801,21 +801,61 @@ def step_verify(fresh: bool) -> None:
     elif fresh:
         print()
         info("start the services, then re-run autostart-test.ps1 without -Fresh")
-    tail = [l for l in out.splitlines() if any(k in l for k in
-            ("passed", "warnings", "failures", "VERDICT", "[FAIL]", "[WARN]"))]
-    for line in tail[-14:]:
-        stripped = line.rstrip()
-        if "[FAIL]" in stripped:
-            print(f"  {_c('[FAIL]', NO)}   {stripped.split(']', 1)[-1].strip()}")
-        elif "[WARN]" in stripped:
-            print(f"  {_c('[WARN]', WARN)}   {stripped.split(']', 1)[-1].strip()}")
-        else:
-            print(f"        {_c(stripped.strip(), DIM)}")
 
-    if code != 0:
-        warn("autotest reported failures - see above")
+
+def step_audit() -> int:
+    """Report every remaining mismatch, not the first one.
+
+    Runs after everything is written, so it sees the config that was actually
+    produced rather than the one that was intended. Each line carries the
+    command that fixes it - the audit only ever reads, so nothing here has
+    already been changed behind the person's back.
+    """
+    heading(_c("Final check", BOLD))
+    print()
+
+    audit = ROOT / "tools" / "audit.py"
+    if not audit.exists():
+        info("tools/audit.py not present, skipping")
+        return 0
+
+    code, out = run(f'"{sys.executable}" "{audit}" --json', timeout=900)
+    if code != 0 and not out.strip():
+        warn(f"audit could not run: {out.strip()[:200]}")
+        return 0
+
+    try:
+        findings = json.loads(out)
+    except json.JSONDecodeError:
+        warn("audit returned unreadable output, skipping")
+        return 0
+
+    fails = [f for f in findings if f["severity"] == "FAIL"]
+    warns = [f for f in findings if f["severity"] == "WARN"]
+    notes = [f for f in findings if f["severity"] == "INFO"]
+
+    for f in fails + warns:
+        mark = _c("FAIL", NO) if f["severity"] == "FAIL" else _c("WARN", WARN)
+        print(f"  {mark}  {f['title']}")
+        if f["detail"]:
+            print(f"        {_c(f['detail'], DIM)}")
+        if f["fix"]:
+            print(f"        {_c('fix: ' + f['fix'], DIM)}")
+    if notes:
         print()
-        info("most common cause: run opencode-shim/install-npm-shim.ps1")
+        for f in notes:
+            print(f"  {_c('note', DIM)}  {f['title']}")
+
+    print()
+    if fails:
+        no(f"{len(fails)} mismatch(es) still open, {len(warns)} warning(s)")
+        info("tools/audit.py prints the same list with more detail")
+    elif warns:
+        warn(f"no failures, {len(warns)} warning(s)")
+    else:
+        good("no mismatches")
+
+    return len(fails)
 
 
 # ── main ───────────────────────────────────────────────────────────────────
@@ -877,6 +917,10 @@ def main() -> int:
             if autostart:
                 print("  would register 2 scheduled tasks")
             print()
+            # The audit only reads, so it is safe here and it is the whole
+            # point of a dry run: what would be wrong right now.
+            step_audit()
+            print()
             return 0
 
         if not args.yes and not ask_yes_no("write this configuration?", default=True):
@@ -893,6 +937,9 @@ def main() -> int:
         step_install_shim()
         step_autostart(autostart)
         step_verify(fresh=not autostart)
+
+        print()
+        open_issues = step_audit()
 
         print()
         print(rule("="))
@@ -912,6 +959,9 @@ def main() -> int:
             print(f"  Then message your bot on Telegram. Run /list inside the chat.")
         print()
         print(f"  {_c('Only a real reboot proves the logon trigger fires.', DIM)}")
+        if open_issues:
+            print()
+            warn(f"{open_issues} item(s) above still need attention")
         print()
         return 0
 

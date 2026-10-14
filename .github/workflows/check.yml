@@ -78,6 +78,16 @@ jobs:
         # change?" - the two copies diverge silently.
         continue-on-error: true
 
+      - name: the audit fires when something is wrong
+        run: python tools\check-audit.py
+
+      - name: repo carries no caches or build leftovers
+        run: python tools\audit.py --only repo
+        # On a clean checkout this group is silent by definition. On a
+        # developer machine it catches what a tool wrote into the repository:
+        # pip/cache and PowerShell's ModuleAnalysisCache were both committed
+        # in the first commit, before any test could catch them.
+
   shim:
     name: compatibility shim
     runs-on: windows-latest

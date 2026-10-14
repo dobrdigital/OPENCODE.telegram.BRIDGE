@@ -25,6 +25,17 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
+# Инструменты пишут кэш туда, где оказались запущены. Один запуск из корня
+# репозитория - и в первый коммит попали pip/cache и ModuleAnalysisCache.
+pip/
+Microsoft/
+nul
+Thumbs.db
+
+# Артефакты автотестов
+autotest*.log
+cc-stt-selftest/
+
 # ── Редакторы и ОС ──────────────────────────────────────────────────
 .vscode/
 .idea/

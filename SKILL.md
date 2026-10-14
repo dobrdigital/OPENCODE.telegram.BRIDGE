@@ -25,6 +25,33 @@ Every command here was executed and verified on a live host.
 | Telegram and CLI disagree on the conversation | `reset_on_idle_mins` — [config](#configtoml) |
 | A command fails with a bare exit code | [Version skew](#the---dir-incompatibility-and-a-second-bug-hiding-behind-it) |
 
+## Start here when nothing explains itself
+
+```powershell
+python tools\audit.py
+```
+
+Nearly every failure in this document is silent. OpenCode prints its help text and exits 1 on an
+unknown flag, so a wrong argument is indistinguishable from a missing feature, and nothing reports
+itself. `audit.py` reads the repository, the live install and the machine, prints every mismatch it
+finds **rather than stopping at the first**, and puts the fixing command next to each one. It never
+writes, installs, stops or repairs anything.
+
+| Group | What it reconciles |
+|---|---|
+| `repo` | caches and leftovers committed by a tool run from the repo root, oversized files, tokens |
+| `dep` | installed version against the live npm / pip / winget registry |
+| `config` | multi-element `cmd`, a pinned `model`, `reset_on_idle_mins`, `CHANGE-ME` left in place, `speech` enabled with nothing on its port, `[projects]` where `[[projects]]` belongs |
+| `shim` | both npm launchers — `opencode.cmd` **and** the extensionless `opencode` — routed through the shim |
+| `task` | registered, correct working directory, shim delay strictly before the bridge delay |
+| `runtime` | port occupancy and orphaned `opencode-cli.exe serve --service` whose parent has died |
+| `drift` | repository against the live install |
+
+`python tools\check-audit.py` proves the audit fires at all. That test exists because "no mismatches"
+on a healthy machine looks identical to a checker whose conditions never match anything — and the
+first version of this document had exactly that problem: it indexed `[[projects]]` as a list and
+crashed on a plausible config instead of reporting the wrong shape.
+
 ## What `setup.py` does for you
 
 The steps below are what the installer performs, and why each one exists. Reading them in order is
