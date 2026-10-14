@@ -32,6 +32,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import sys
 
@@ -71,18 +72,40 @@ class Finding:
         return head
 
 
-def _run(cmd: str, timeout: int = 90) -> tuple[int, str]:
-    import shutil
+def _run(cmd: str, timeout: int = 90, cwd: str | None = None) -> tuple[int, str]:
     exe = cmd.split()[0].strip('"').strip("'")
     resolved = shutil.which(exe) or (exe if exe.lower().endswith((".exe", ".cmd", ".bat")) else None)
     shell = bool(resolved and resolved.lower().endswith((".cmd", ".bat")))
     try:
-        r = subprocess.run(cmd, shell=shell, capture_output=True, timeout=timeout)
+        r = subprocess.run(cmd, shell=shell, capture_output=True, timeout=timeout,
+                           cwd=cwd)
         return r.returncode, (r.stdout + r.stderr).decode("utf-8", "replace")
     except subprocess.TimeoutExpired:
         return 124, "timed out"
     except Exception as e:                                       # noqa: BLE001
         return 127, f"{type(e).__name__}: {e}"
+
+
+def _json_from(text: str):
+    """First JSON value in a buffer, ignoring whatever follows it.
+
+    npm and opencode both interleave notices with their output. Demanding
+    that the buffer end where the JSON ends turns a version banner into a
+    silent "not installed", so stop at the end of the first value instead.
+
+    Whichever bracket comes first decides, and it must be whichever comes
+    first: searching for '{' first and falling back to '[' looks harmless but
+    silently truncates '[{...}, {...}]' to its first element, so a list of
+    sessions reads as a length of 1.
+    """
+    starts = [i for i in (text.find("{"), text.find("[")) if i >= 0]
+    if not starts:
+        return None
+    try:
+        value, _ = json.JSONDecoder().raw_decode(text[min(starts):])
+    except json.JSONDecodeError:
+        return None
+    return value
 
 
 # ── 1. repository hygiene ────────────────────────────────────────────────
@@ -564,7 +587,77 @@ def check_runtime() -> list[Finding]:
                 "the desktop and Telegram stop seeing each other's work",
                 "close every OpenCode window, then start the desktop app once"))
 
+    # How many sessions the server sees, compared with how many exist.
+    #
+    # Counting servers is necessary but not sufficient. One healthy server and
+    # one stale one look identical from the outside, and the difference is
+    # exactly the reported symptom: `/list` returns nothing while the database
+    # is full. `--standalone` reads the database directly, so it is the
+    # control. Measured here: the service answered [] while standalone
+    # returned every session, including the one the Telegram bridge uses.
+    #
+    # Detecting this precisely matters because the usual advice has been "reboot
+    # the machine". Now it can say which half of the comparison is wrong.
+    counts = _session_counts()
+    if counts:
+        via_service, standalone = counts
+        if standalone > 0 and via_service < standalone:
+            out.append(Finding(
+                "runtime.stale_server", FAIL,
+                f"the shared server sees {via_service} of "
+                f"{standalone} session(s)",
+                "it is running but its view of the database is behind. "
+                "`/list` in the chat comes back empty and looks like a "
+                "misconfigured bridge rather than a stale process",
+                "restart the OpenCode server - not the bridge, and not the "
+                "machine. Close every OpenCode window, then run: "
+                "opencode-cli.exe serve --service"))
+        elif standalone == 0 and via_service == 0:
+            out.append(Finding(
+                "runtime.sessions", INFO,
+                "no sessions yet", "both views are empty"))
+
     return out
+
+
+def _bridge_work_dir() -> str:
+    """Where the bridge actually runs - sessions are grouped by directory.
+
+    Asking from the repository directory answers a question nobody was
+    holding: that folder legitimately has no sessions, so both views come
+    back empty and the check reports nothing while the real project is
+    unreadable.
+    """
+    cfg, err = _load_toml(BRIDGE_DIR / "config.toml")
+    if cfg:
+        projects = cfg.get("projects")
+        proj = projects[0] if isinstance(projects, list) and projects else (
+            projects if isinstance(projects, dict) else None)
+        if proj:
+            wd = ((proj.get("agent") or {}).get("options") or {}).get("work_dir")
+            if wd and pathlib.Path(wd).is_dir():
+                return str(wd)
+    return str(ROOT)
+
+
+def _session_counts() -> tuple[int, int] | None:
+    """(via the shared server, via --standalone), or None if unmeasurable."""
+    cwd = _bridge_work_dir()
+
+    def count(extra: list[str]) -> int | None:
+        code, out = _run(
+            "opencode session list --format json " + " ".join(extra),
+            timeout=180, cwd=cwd)
+        data = _json_from(out)
+        if not isinstance(data, list):
+            return None
+        return len(data)
+
+    service = count([])
+    standalone = count(["--standalone"])
+    if service is None or standalone is None:
+        return None
+    return service, standalone
 
 
 def _pid_alive(pid: int) -> bool:
@@ -669,6 +762,62 @@ def check_drift() -> list[Finding]:
     return out
 
 
+# ── 6c. session storage ──────────────────────────────────────────────────
+
+# A session with almost no turns is not automatically rubbish, and this file
+# deletes nothing on that basis. The threshold below is only used to sort the
+# list so the likely noise is visible first; the decision is the reader's.
+TINY_SESSION_MSGS = 5
+
+
+def check_sessions() -> list[Finding]:
+    """Summarise the session table; never delete anything.
+
+    Opened read-only via URI mode, so a bug here cannot modify the database.
+    Nothing is removed: a three-turn session may be a throwaway from a
+    contract test, or the only record of a real question. Deciding that from
+    a row count is not this tool's call to make.
+    """
+    out: list[Finding] = []
+    db = HOME / ".local" / "share" / "opencode" / "opencode.db"
+    if not db.exists():
+        return out
+
+    try:
+        import sqlite3                                        # noqa: PLC0415
+        con = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=10)
+        rows = con.execute(
+            "select coalesce(s.title, '(untitled)'),"
+            "       (select count(*) from session_message m"
+            "         where m.session_id = s.id)"
+            "  from session_v2 s order by 2 asc limit 400"
+        ).fetchall()
+        total = con.execute("select count(*) from session_v2").fetchone()[0]
+        con.close()
+    except Exception as e:                                   # noqa: BLE001
+        return [Finding("sessions.read", WARN,
+                        "could not read the session database",
+                        f"{type(e).__name__}: {e}")]
+
+    tiny = [r for r in rows if r[1] < TINY_SESSION_MSGS]
+    out.append(Finding(
+        "sessions.summary", INFO,
+        f"{total} session(s) stored, {len(tiny)} with fewer than "
+        f"{TINY_SESSION_MSGS} messages",
+        f"database: {db}"))
+
+    if tiny:
+        shown = ", ".join(f"{t[:28]} ({n})" for t, n in tiny[:8])
+        more = f" and {len(tiny) - 8} more" if len(tiny) > 8 else ""
+        out.append(Finding(
+            "sessions.noise", WARN if len(tiny) > 10 else INFO,
+            f"{len(tiny)} very short session(s), probably test leftovers",
+            f"{shown}{more}",
+            f"remove them in the desktop app, or "
+            f"opencode session delete <id> - this tool deletes nothing"))
+    return out
+
+
 # ── registry ─────────────────────────────────────────────────────────────
 
 CHECKS = [
@@ -679,6 +828,7 @@ CHECKS = [
     ("task", check_tasks),
     ("runtime", check_runtime),
     ("skew", check_version_skew),
+    ("sessions", check_sessions),
     ("drift", check_drift),
 ]
 

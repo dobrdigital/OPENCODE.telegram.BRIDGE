@@ -223,7 +223,14 @@ def step_dependencies() -> dict:
     for d in results:
         state[d.key] = bool(d.current)
         if not d.current:
-            if d.kind == "manual":
+            blocked = next((n for n in d.notes if "absence is unproven" in n
+                            or "could not" in n), "")
+            if blocked:
+                # The check could not tell, which is not the same as absent.
+                # Saying "not installed" here would invite a reinstall over a
+                # working copy.
+                warn(f"{d.label} could not be read - {blocked}")
+            elif d.kind == "manual":
                 warn(f"{d.label} not found - {d.why}")
                 info(f"    install from {d.install}")
             else:

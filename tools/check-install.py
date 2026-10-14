@@ -26,6 +26,17 @@ def report(ok: bool, name: str, detail: str = "") -> None:
         failures += 1
 
 
+def notice(name: str, detail: str = "") -> None:
+    """Report something worth acting on that must not fail the build.
+
+    The gateway adds free models on its own schedule. Treating each arrival
+    as a failure means every one of them turns the repository red until
+    somebody edits the template by hand - a check that cries wolf on a
+    routine event trains people to ignore the whole file.
+    """
+    print(f"  note  {name}" + (f"  {detail}" if detail else ""))
+
+
 def jsonc_load(path: pathlib.Path):
     """Minimal JSONC: drop the string-keyed comment block and // comments."""
     s = path.read_text(encoding="utf-8")
@@ -92,8 +103,16 @@ def main() -> int:
         declared = {m["model"] for m in models}
         report(declared <= live, "declared models exist upstream",
                f"missing: {sorted(declared - live)}" if declared - live else "")
-        report(live <= declared, "no upstream model is unregistered",
-               f"unregistered: {sorted(live - declared)}" if live - declared else "")
+        if live - declared:
+            # Upstream added models. Not an error - the template is not
+            # required to list every free model the gateway happens to offer,
+            # and failing here would turn every routine upstream release into
+            # a red build. It is a suggestion, so it stays a suggestion.
+            notice("upstream models not in the template",
+                   f"add to config.example.toml if you want them in /model: "
+                   f"{', '.join(sorted(live - declared))}")
+        else:
+            report(True, "no upstream model is unregistered")
     except subprocess.TimeoutExpired:
         report(False, "opencode models reachable", "timed out")
 

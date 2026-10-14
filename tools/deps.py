@@ -144,6 +144,49 @@ def _installed_npm(pkg: str) -> str | None:
     return None
 
 
+def why_unreadable(dep: Dep) -> str:
+    """Why a dependency could not be read - or '' if it is genuinely absent.
+
+    Absence and "could not tell" both arrive as None, and collapsing them is
+    how a working install gets reported as missing and then offered for
+    reinstall on top of itself. A timeout, a dead package manager and an
+    empty result are three different situations.
+
+    Note that a non-zero exit alone proves nothing. `npm ls -g` exits 1 for a
+    package that is simply not installed, which is a correct answer, while
+    the same exit code from a package manager that cannot reach its registry
+    is an unknown one. So the question is not "did it fail" but "did it say
+    something structured" - if its output parses, it was read successfully
+    and the answer is trustworthy.
+    """
+    if dep.kind == "npm":
+        checker = f"npm ls -g {dep.pkg} --depth=0 --json"
+    elif dep.kind == "pip":
+        checker = f'"{candidate_pythons()[0]}" -m pip show {dep.pkg}'
+    elif dep.kind == "winget":
+        checker = f"winget list --id {dep.pkg} --exact"
+    else:
+        return ""
+
+    code, out = _run(checker, timeout=60)
+    if code == 124:
+        return ("the check timed out, so absence is unproven - this is not "
+                "the same as not being installed")
+    if code == 127:
+        return "the checker itself could not be launched"
+    if dep.kind == "npm" and isinstance(_json_from(out), dict):
+        return ""      # npm answered with a real answer: the package is absent
+    if code == 0:
+        return ""      # it succeeded; nothing is wrong
+    lines = [l.strip() for l in out.splitlines() if l.strip()]
+    talky = next((l for l in lines
+                  if re.search(r"error|err!|not found|cannot|timed", l, re.I)
+                  and not l.startswith(("{", "[", '"'))), "")
+    return (f"the checker failed (exit {code}): {talky[:120]}"
+            if talky else f"the checker failed (exit {code}) and said nothing "
+                          f"usable")
+
+
 def _json_from(text: str) -> dict | None:
     """Pull the first JSON object out of a command's output, ignoring the rest.
 
@@ -395,6 +438,10 @@ def probe(dep: Dep) -> Dep:
             dep.latest = dep.current
     except Exception as e:                                   # noqa: BLE001
         dep.notes.append(f"probe failed: {type(e).__name__}")
+    if dep.current is None and dep.kind not in ("manual",):
+        why = why_unreadable(dep)
+        if why:
+            dep.notes.append(why)
     return dep
 
 
