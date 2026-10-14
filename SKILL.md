@@ -576,6 +576,36 @@ Telegram session away from the desktop and CLI context.
 identically on a 12-character phrase and a 3600-character one — the misleading clue is the
 `text_len=` value printed right before the error.
 
+**An orphaned service serves an empty session list.** Symptom: `/list` returns nothing, or a
+`session list` command exits 0 with no rows, while the database and `--standalone` both show every
+session.
+
+```
+opencode session list --standalone   -> 9 sessions
+opencode session list                -> (nothing)
+```
+
+`opencode-cli.exe serve --service` is a long-lived background service. The desktop app starts it,
+and when the desktop is closed or restarted the service keeps running with its parent gone —
+orphaned. It then serves from a stale snapshot indefinitely.
+
+Nothing errors. The list is simply wrong, which is why this costs hours: there is no log line, no
+non-zero exit, and `/restart` in the chat does **not** help, because that restarts the bridge and
+not the OpenCode service.
+
+```powershell
+# is the service alive, and for how long
+Get-CimInstance Win32_Process -Filter "Name like 'opencode%'" |
+  Where-Object CommandLine -like '*serve*--service*' |
+  Select-Object ProcessId, ParentProcessId, CreationDate
+```
+
+A `ParentProcessId` that no longer exists means it is orphaned.
+
+The only reliable cure is restarting the machine, which also finally exercises the autostart
+trigger. `autostart-test.ps1` detects this condition and reports `STALE (n via --standalone, 0 via
+service)`.
+
 **A shim in `cmd` does not reach `session list`.** Symptom: `/list` fails with `exit status 1`
 while every other command works. Root cause is `opencode.go:654` passing only the binary element of
 `cmd` and discarding `extraArgs` — so a `node.exe + shim.js` pair degenerates into
