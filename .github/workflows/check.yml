@@ -42,6 +42,13 @@ jobs:
       - name: paths are portable
         run: python tools\sanitize-paths.py --check
 
+      - name: repo has not drifted from the live install
+        run: python tools\check-drift.py
+        # Skipped in CI: there is no live install there. On a developer machine
+        # this is the check that stops "I edited the repo, why did nothing
+        # change?" - the two copies diverge silently.
+        continue-on-error: true
+
   shim:
     name: compatibility shim
     runs-on: windows-latest
