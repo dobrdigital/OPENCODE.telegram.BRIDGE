@@ -58,7 +58,11 @@ param(
     [string] $Launcher  = (Join-Path $env:USERPROFILE '.cc-connect\start-cc-connect.ps1'),
     [string] $Bin       = (Join-Path $env:APPDATA  'npm\cc-connect.cmd'),
     [string] $Root      = (Join-Path $env:USERPROFILE '.cc-connect'),
-    [int]    $SimTimeoutSec = 45
+    [int]    $SimTimeoutSec = 45,
+    # Fresh-install mode: report "not installed yet" as a warning instead of a
+    # failure. Used by setup.py right after writing config but before the
+    # services have ever been started, where absence is expected, not broken.
+    [switch] $Fresh
 )
 
 $ErrorActionPreference = 'Continue'
@@ -127,6 +131,12 @@ function Add-Result {
 }
 
 function Test-Ok      { param([string]$N, [bool]$C, [string]$D='')            Add-Result $N $C $D 'FAIL' }
+function Test-Present { param([string]$N, [bool]$C, [string]$D='')
+    # In fresh mode "absent" is expected, not broken. Only a hard failure when
+    # the thing should already exist.
+    if ($Fresh -and -not $C) { Add-Result $N $true $D 'WARN'; return }
+    Add-Result $N $C $D 'FAIL'
+}
 function Test-Eq      { param([string]$N, $Expect, $Actual, [string]$D='')
     $ok = ([string]$Expect -eq [string]$Actual)
     Add-Result $N $ok $(if ($ok) { $D } else { "expected '$Expect', got '$Actual'. $D" })
@@ -156,7 +166,7 @@ if ($env:OS -ne 'Windows_NT') {
 Write-Section 'A. Launcher integrity'
 
 $launcherExists = Test-Path -LiteralPath $Launcher
-Test-Ok 'launcher file exists' $launcherExists $Launcher
+Test-Present 'launcher file exists' $launcherExists $Launcher
 
 if ($launcherExists) {
     $parseErrors = $null
@@ -193,7 +203,7 @@ $task = $null
 try { $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction Stop }
 catch { }
 
-Test-Ok "task '$TaskName' is registered" ($null -ne $task) `
+Test-Present "task '$TaskName' is registered" ($null -ne $task) `
     $(if ($null -eq $task) { 'Register it, or the bridge will not survive a reboot' } else { 'state: ' + $task.State })
 
 if ($task) {
@@ -405,8 +415,8 @@ $shimPs1  = Join-Path $shimDir 'start-gigaam-stt.ps1'
 $shimTask = 'gigaam-stt-autostart'
 $shimPort = 8300
 
-Test-Ok 'shim launcher exists' (Test-Path -LiteralPath $shimPs1) $shimPs1
-Test-Ok 'shim server exists'   (Test-Path -LiteralPath $shimPy)  $shimPy
+Test-Present 'shim launcher exists' (Test-Path -LiteralPath $shimPs1) $shimPs1
+Test-Present 'shim server exists'   (Test-Path -LiteralPath $shimPy)  $shimPy
 
 if (Test-Path -LiteralPath $shimPs1) {
     $shimErrs = $null
@@ -443,7 +453,7 @@ Test-Ok 'ffmpeg on PATH (needed by both shim and bridge)' ($null -ne $ffmpegCmd)
 # -- scheduled task --
 $shimTaskDef = $null
 try { $shimTaskDef = Get-ScheduledTask -TaskName $shimTask -ErrorAction Stop } catch { }
-Test-Ok "task '$shimTask' is registered" ($null -ne $shimTaskDef) `
+Test-Present "task '$shimTask' is registered" ($null -ne $shimTaskDef) `
     $(if ($null -eq $shimTaskDef) { 'voice messages will not be transcribed after a reboot' } else { 'state: ' + $shimTaskDef.State })
 
 if ($shimTaskDef) {
