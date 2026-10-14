@@ -3,10 +3,45 @@ name: setup-cc-connect-voice-bridge
 description: Set up a Windows host so OpenCode is driven from Telegram through the cc-connect bridge, sharing one session with the OpenCode desktop app and the CLI TUI, with local GigaAM speech-to-text and Edge text-to-speech, and autostart that survives reboots. Use when installing or repairing a Telegram-to-OpenCode bridge, when the desktop app does not show the Telegram session, when adding voice messages to the bridge, or when the bridge must come back automatically after a reboot.
 ---
 
-# Setup: cc-connect ↔ OpenCode with local voice I/O
+# Diagnosis and version-skew reference
 
-An ordered procedure for building this stack on a Windows host. Every command was executed and
-verified on the target machine. Follow top to bottom; each step has its own check.
+**Not an install guide.** Run `python setup.py`, or follow [README.md](README.md) for the manual
+procedure. This document answers the questions an installer cannot: *why* is this so fragile,
+*which* incompatibility am I hitting, and *what* the failure actually looks like.
+
+Read it when something breaks, or before touching `config.toml` by hand.
+
+Every command here was executed and verified on a live host.
+
+## Start here when something is broken
+
+| Symptom | Section |
+|---|---|
+| `/list` says `exit status 1` | [The `--dir` incompatibility](#the---dir-incompatibility-and-a-second-bug-hiding-behind-it) |
+| Desktop does not show the Telegram session | [Confirm one server](#step-1--confirm-desktop-and-cli-already-share-one-server) |
+| `/list` empty, but the database has sessions | orphaned service — see [Pitfalls](#a-shim-in-cmd-does-not-reach-session-list) |
+| Voice messages arrive as nothing | [Voice input](#step-6--voice-input-gigaam) |
+| Bot silent after a reboot | [Autostart](#step-4--autostart) |
+| Telegram and CLI disagree on the conversation | `reset_on_idle_mins` — [config](#configtoml) |
+| A command fails with a bare exit code | [Version skew](#the---dir-incompatibility-and-a-second-bug-hiding-behind-it) |
+
+## What `setup.py` does for you
+
+The steps below are what the installer performs, and why each one exists. Reading them in order is
+useful when the installer is not available or when you need to deviate deliberately.
+
+| Step | What | Why it is not optional |
+|---|---|---|
+| 1 | one shared server | two servers = two isolated sessions that never sync |
+| 2 | session storage | sessions are grouped by directory |
+| 3 | bridge config | `cmd` shape and idle rotation are load-bearing |
+| 4 | autostart | shim before bridge, or a voice message can arrive first |
+| 5 | voice output | `edge-tts` is an external program, not built in |
+| 6 | voice input | OpenAI-shaped endpoint required; the shim provides one |
+| 7 | apply and verify | config is read at startup only |
+| 8 | acceptance | only a real reboot proves the trigger fires |
+
+---
 
 ---
 

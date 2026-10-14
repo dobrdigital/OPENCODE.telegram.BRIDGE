@@ -468,6 +468,66 @@ if ($shimTaskDef) {
         "shim ${shimSecs}s vs bridge ${secs}s - a voice arriving in the gap would fail"
 }
 
+# -- shared service: does it still agree with the database? --
+# A long-lived `opencode-cli.exe serve --service` outlives the desktop app
+# that started it. When it does, it keeps serving from a stale snapshot:
+# `session list` comes back empty while the database and --standalone both
+# show every session. Nothing errors; the list is simply wrong. Symptom seen
+# live, and nothing detected it, so it is detected here.
+$serviceCheck = 'ok'
+try {
+    $svc = Get-CimInstance Win32_Process -Filter "Name like 'opencode%'" -ErrorAction SilentlyContinue |
+           Where-Object { $_.CommandLine -like '*serve*--service*' } |
+           Select-Object -First 1
+    if (-not $svc) {
+        $serviceCheck = 'absent'
+    }
+    else {
+        # Probe from the bridge's work_dir, not from wherever this test runs.
+        # The comparison is only meaningful where sessions actually exist: run
+        # it from a directory with none and both sides read zero, which makes a
+        # stale service look healthy - exactly the case this exists to catch.
+        $oc = Join-Path $env:APPDATA 'npm\opencode.cmd'
+        $probeDir = (Get-Location).Path
+        $cfg = Join-Path $Root 'config.toml'
+        if (Test-Path -LiteralPath $cfg) {
+            $m = Select-String -Path $cfg -Pattern '^\s*work_dir\s*=\s*"([^"]+)"' |
+                 Select-Object -First 1
+            if ($m -and $m.Matches[0].Groups[1].Value) {
+                $candidate = $m.Matches[0].Groups[1].Value
+                if (Test-Path -LiteralPath $candidate) { $probeDir = $candidate }
+            }
+        }
+
+        Push-Location $probeDir
+        try {
+            $direct    = (& $oc session list --json --standalone 2>$null | Out-String)
+            $viaService = (& $oc session list --json 2>$null | Out-String)
+        }
+        finally { Pop-Location }
+
+        $nDirect  = ([regex]::Matches($direct, '"id"\s*:')).Count
+        $nService = ([regex]::Matches($viaService, '"id"\s*:')).Count
+
+        if ($nDirect -eq 0 -and $nService -eq 0) {
+            $serviceCheck = "vacuous (no sessions in $probeDir - cannot compare)"
+        }
+        elseif ($nDirect -gt 0 -and $nService -eq 0) {
+            $serviceCheck = "STALE ($nDirect via --standalone, 0 via service)"
+        }
+        else {
+            $serviceCheck = "ok ($nDirect/$nService in $probeDir)"
+        }
+    }
+}
+catch { $serviceCheck = 'probe failed' }
+
+Test-Warn 'background service agrees with the database' ($serviceCheck -like 'ok*' -or $serviceCheck -eq 'absent') `
+    "service=$serviceCheck" `
+    "`n           An orphaned service keeps answering with an empty session list while the database is" `
+    "`n           fine. Only restarting the machine clears it - /restart in the chat restarts the bridge," `
+    "`n           not this. Symptom: /list shows nothing, but 'opencode session list --standalone' does."
+
 # -- live endpoint --
 $health = $null
 try { $health = Invoke-RestMethod -Uri "http://127.0.0.1:$shimPort/health" -TimeoutSec 5 } catch { }

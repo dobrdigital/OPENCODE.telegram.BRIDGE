@@ -155,7 +155,7 @@ def ask_choice(title: str, options: list[str], default_index: int = 0) -> int:
 # ── steps ──────────────────────────────────────────────────────────────────
 
 def step_prereqs() -> dict:
-    heading(f"[1/8] {_c('Checking prerequisites', BOLD)}")
+    heading(f"[1/9] {_c('Checking prerequisites', BOLD)}")
     state = {}
 
     _, out = run("opencode --version")
@@ -209,7 +209,7 @@ def step_prereqs() -> dict:
 
 
 def step_telegram(noninteractive: bool, token: str) -> str | None:
-    heading(f"[2/8] {_c('Telegram bot', BOLD)}")
+    heading(f"[2/9] {_c('Telegram bot', BOLD)}")
     print()
     print("  The bridge talks to Telegram through a bot.")
     print("  Create one with @BotFather in Telegram, it will give you a token.")
@@ -238,7 +238,7 @@ def step_telegram(noninteractive: bool, token: str) -> str | None:
 
 
 def step_project(noninteractive: bool, project_dir: str) -> Path:
-    heading(f"[3/8] {_c('Project directory', BOLD)}")
+    heading(f"[3/9] {_c('Project directory', BOLD)}")
     print()
     print("  OpenCode runs with this as its working directory. Sessions are")
     print("  grouped by folder, so pick the real project - not a scratch dir,")
@@ -279,7 +279,7 @@ def step_project(noninteractive: bool, project_dir: str) -> Path:
 
 
 def step_model(noninteractive: bool, state: dict) -> tuple[str, list[str]]:
-    heading(f"[4/8] {_c('Model', BOLD)}")
+    heading(f"[4/9] {_c('Model', BOLD)}")
     print()
     print("  Free models from the opencode gateway. No API key required.")
     print()
@@ -316,7 +316,7 @@ def step_model(noninteractive: bool, state: dict) -> tuple[str, list[str]]:
 
 
 def step_name(noninteractive: bool, project: Path, name: str) -> str:
-    heading(f"[5/8] {_c('Session name', BOLD)}")
+    heading(f"[5/9] {_c('Session name', BOLD)}")
     print()
     print("  Labels this bridge's session. Used by cc-connect -p and by")
     print("  /new, so it shows up in cron and relay commands.")
@@ -331,7 +331,7 @@ def step_name(noninteractive: bool, project: Path, name: str) -> str:
 
 
 def step_voice(state: dict) -> tuple[bool, bool]:
-    heading(f"[6/8] {_c('Voice input', BOLD)}  {_c('(speech to text)', DIM)}")
+    heading(f"[6/9] {_c('Voice input', BOLD)}  {_c('(speech to text)', DIM)}")
     print()
 
     if not state.get("handy"):
@@ -350,7 +350,7 @@ def step_voice(state: dict) -> tuple[bool, bool]:
 
 
 def step_tts(state: dict) -> bool:
-    heading(f"[7/8] {_c('Voice output', BOLD)}  {_c('(text to speech)', DIM)}")
+    heading(f"[7/9] {_c('Voice output', BOLD)}  {_c('(text to speech)', DIM)}")
     print()
     print("  provider 'edge' is Microsoft's endpoint. No API key, no cost.")
     print()
@@ -363,9 +363,20 @@ def step_tts(state: dict) -> bool:
     return enable
 
 
+def step_autostart_question() -> bool:
+    heading(f"[8/9] {_c('Autostart at logon', BOLD)}")
+    print()
+    print("  Two scheduled tasks so the bridge and the voice shim come back")
+    print("  after a reboot. The shim starts first (15s), the bridge second")
+    print("  (20s), so a voice message cannot arrive before the thing that")
+    print("  transcribes it is listening.")
+    print()
+    return ask_yes_no("start them automatically after login?", default=True)
+
+
 def step_write(args, project: Path, session_name: str, token: str | None,
                model: str, stt: bool, tts: bool) -> Path:
-    heading(f"[8/8] {_c('Writing configuration', BOLD)}")
+    heading(f"[9/9] {_c('Writing configuration', BOLD)}")
     print()
 
     template = ROOT / "config.example.toml"
@@ -598,6 +609,7 @@ def main() -> int:
         session_name = step_name(args.yes, project, args.name)
         stt, _ = step_voice(state)
         tts = step_tts(state)
+        autostart = args.autostart or step_autostart_question()
 
         print()
         print(rule())
@@ -617,7 +629,7 @@ def main() -> int:
             print(f"  would write {BRIDGE_DIR / 'config.toml'}")
             print(f"  would write {OC_CONFIG}")
             print(f"  would install the npm shim into {NPM_BIN}")
-            if args.autostart:
+            if autostart:
                 print("  would register 2 scheduled tasks")
             print()
             return 0
@@ -634,8 +646,8 @@ def main() -> int:
             info("fix config.toml by hand, or delete it and run setup.py again")
             return 1
         step_install_shim()
-        step_autostart(args.autostart)
-        step_verify(fresh=not args.autostart)
+        step_autostart(autostart)
+        step_verify(fresh=not autostart)
 
         print()
         print(rule("="))

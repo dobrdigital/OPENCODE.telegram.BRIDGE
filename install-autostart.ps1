@@ -64,7 +64,8 @@ function New-LogonTask {
     )
 
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' `
-        -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $Script)
+        -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}"' -f $Script) `
+        -WorkingDirectory $WorkingDir
 
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
     $trigger.Delay = 'PT{0}S' -f $DelaySec
