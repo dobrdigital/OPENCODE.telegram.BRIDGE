@@ -29,6 +29,29 @@ jobs:
       - name: the installer refuses to leave a bad config behind
         run: python tools\check-setup-rollback.py
 
+      - name: dependency table is internally consistent
+        shell: pwsh
+        run: |
+          # A wrong package name is the worst failure this repo can ship:
+          # it tells someone to install software that is not the thing we
+          # integrate with. `opencode-ai` exists on npm at version 1.19.0 -
+          # the old line whose database schema breaks the desktop app - while
+          # the real package is @opencode/cli. Assert the hint we print names
+          # the package the installer actually uses.
+          $ErrorActionPreference = 'Stop'
+          $setup = Get-Content setup.py -Raw
+          $deps  = Get-Content tools\deps.py -Raw
+
+          if ($setup -match 'npm i -g opencode-ai') {
+            Write-Error 'setup.py suggests installing opencode-ai (v1.19.0, wrong schema)'
+            exit 1
+          }
+          if ($deps -notmatch '@opencode/cli') {
+            Write-Error 'deps.py does not reference @opencode/cli'
+            exit 1
+          }
+          Write-Host 'package names consistent'
+
       - name: no secrets committed
         shell: pwsh
         run: |

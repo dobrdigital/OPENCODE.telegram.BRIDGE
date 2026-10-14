@@ -174,58 +174,103 @@ def ask_choice(title: str, options: list[str], default_index: int = 0) -> int:
 
 # ── steps ──────────────────────────────────────────────────────────────────
 
-def step_prereqs() -> dict:
-    heading(f"[1/9] {_c('Checking prerequisites', BOLD)}")
+def step_dependencies() -> dict:
+    """Check every dependency against its official registry, offer to update.
+
+    Every version comes from the registry itself (npm view, pip index, winget
+    list), never from a number typed into this file. And nothing is installed
+    without asking: a machine-wide ffmpeg install may want elevation, and
+    silently running an installer is how people lose trust in a setup wizard.
+    """
+    heading(f"[1/9] {_c('Checking dependencies', BOLD)}")
+    print()
+
+    try:
+        sys.path.insert(0, str(ROOT / "tools"))
+        import deps                                            # noqa: PLC0415
+    except Exception as e:                                       # noqa: BLE001
+        no(f"dependency checker unavailable: {e}")
+        return {"opencode": False, "cc": False, "ffmpeg": False,
+                "edge_tts": False, "handy": False, "stt_model": False}
+
+    print(f"  {_c('querying official registries', DIM)}")
+    results = deps.probe_all()
+
     state = {}
+    updates = []
 
-    _, out = run("opencode --version")
-    if "opencode" in out.lower():
-        ok(f"opencode {out.strip().splitlines()[0].replace('opencode', '').strip()}")
-        state["opencode"] = True
-    else:
-        no("opencode not found - install the CLI first: npm i -g opencode-ai")
-        state["opencode"] = False
-
-    _, out = run("cc-connect --version")
-    if "cc-connect" in out.lower():
-        ok("cc-connect installed")
-        state["cc"] = True
-    else:
-        no("cc-connect not found - install it: npm i -g cc-connect")
-        state["cc"] = False
-
-    _, out = run("ffmpeg -version")
-    if "ffmpeg version" in out:
-        ok("ffmpeg " + out.strip().split()[2])
-        state["ffmpeg"] = True
-    else:
-        no("ffmpeg missing - both voice paths need it: winget install Gyan.FFmpeg")
-        state["ffmpeg"] = False
-
-    code, out = run("pip show edge-tts")
-    has_tts = "edge-tts" in out.lower()
-    if has_tts:
-        ok("edge-tts installed (voice replies available)")
-    else:
-        info("edge-tts missing - voice replies disabled (pip install edge-tts)")
-    state["edge_tts"] = has_tts
-
-    state["handy"] = HANDY.exists()
-    if state["handy"]:
-        ok(f"Handy found at {HANDY}")
-        code, out = run(f'"{HANDY}" --list-models --json', timeout=180)
-        downloaded = [m for m in re.findall(r'"is_downloaded":\s*true', out)]
-        if downloaded:
-            ok(f"{len(downloaded)} speech model(s) downloaded")
-            state["stt_model"] = True
+    for d in results:
+        state[d.key] = bool(d.current)
+        if not d.current:
+            if d.kind == "manual":
+                warn(f"{d.label} not found - {d.why}")
+                info(f"    install from {d.install}")
+            else:
+                no(f"{d.label} not installed - {d.why}")
+        elif d.latest and deps.version_tuple(d.current) < deps.version_tuple(d.latest):
+            warn(f"{d.label} {d.current} -> {d.latest} available")
+            updates.append(d)
         else:
-            warn("Handy installed but no speech model is downloaded yet")
-            state["stt_model"] = False
-    else:
-        info("Handy not found - voice input disabled (STT is optional)")
-        state["stt_model"] = False
+            ok(f"{d.label} {d.current}")
+
+    # ---- offer updates -------------------------------------------------
+    if updates:
+        print()
+        for d in updates:
+            if d.safe_auto and ask_yes_no(f"update {d.label} to {d.latest}?", default=True):
+                info(f"    running: {d.install}")
+                good, tail = deps.install(d, timeout=900)
+                if good:
+                    d.current = deps.probe(d).current or d.latest
+                    ok(f"{d.label} now {d.current}")
+                else:
+                    no(f"{d.label} update failed")
+                    for line in tail.splitlines()[-4:]:
+                        info("    " + line)
+        for d in updates:
+            if not d.safe_auto:
+                # Already reported above; repeat only the command, so the
+                # warning is not printed twice for the same thing.
+                print(f"    {d.label}: {d.install}")
+
+    # ---- offer missing installs ---------------------------------------
+    print()
+    for d in results:
+        if d.current or d.kind == "manual":
+            continue
+        if not d.safe_auto:
+            no(f"{d.label} is required and is missing")
+            info(f"    {d.install}")
+            if not args_noninteractive_default():
+                input("")
+            continue
+        if ask_yes_no(f"install {d.label} now? ({d.install})", default=True):
+            good, tail = deps.install(d, timeout=900)
+            if good:
+                d.current = deps.probe(d).current
+                ok(f"{d.label} installed")
+                state[d.key] = True
+            else:
+                no(f"{d.label} install failed")
+                for line in tail.splitlines()[-4:]:
+                    info("    " + line)
+
+    # ---- speech model --------------------------------------------------
+    if state.get("handy"):
+        code, out = run(f'"{HANDY}" --list-models --json', timeout=240)
+        count = len(re.findall(r'"is_downloaded":\s*true', out))
+        state["stt_model"] = count > 0
+        if count:
+            ok(f"{count} speech model(s) downloaded")
+        else:
+            warn("Handy is installed but no speech model is downloaded yet")
+            info("    open Handy once and download a model - GigaAM handles Russian well")
 
     return state
+
+
+def args_noninteractive_default() -> bool:
+    return False
 
 
 def acquire_lock():
@@ -799,7 +844,7 @@ def main() -> int:
     lock = None
     try:
         lock = acquire_lock()
-        state = step_prereqs()
+        state = step_dependencies()
         if not step_preflight():
             info("stopping before anything was written")
             return 1
