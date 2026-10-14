@@ -42,25 +42,28 @@ CLI TUI  ──┘                      (ОДИН сервер, ОДНА сес�
 git clone <this-repo> cc-connect-bridge
 cd cc-connect-bridge
 
-# 1. Конфиг: копия шаблона + свой токен бота
+# 1. Модель по умолчанию (бесплатная, ключ не нужен)
+copy opencode.jsonc.example.json "$env:USERPROFILE\.config\opencode\opencode.jsonc"
+
+# 2. Конфиг моста: копия шаблона + свой токен бота
 copy config.example.toml "$env:USERPROFILE\.cc-connect\config.toml"
 notepad "$env:USERPROFILE\.cc-connect\config.toml"   # токен + work_dir
 
-# 2. Лаунчеры
+# 3. Лаунчеры
 copy start-cc-connect.ps1 "$env:USERPROFILE\.cc-connect\"
 copy gigaam-stt\* "$env:USERPROFILE\.cc-connect\gigaam-stt\" -Force
 
-# 3. Починить вызов opencode (обязательно, см. «Почему это важно»)
+# 4. Починить вызов opencode (обязательно, см. «Почему это важно»)
 powershell -ExecutionPolicy Bypass -File .\opencode-shim\install-npm-shim.ps1
 
-# 4. Автозагрузка
+# 5. Автозагрузка
 powershell -ExecutionPolicy Bypass -File .\install-autostart.ps1
 
-# 5. Запуск
+# 6. Запуск
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.cc-connect\start-cc-connect.ps1"
 powershell -ExecutionPolicy Bypass -File "$env:USERPROFILE\.cc-connect\gigaam-stt\start-gigaam-stt.ps1"
 
-# 6. Проверка
+# 7. Проверка
 powershell -ExecutionPolicy Bypass -File .\autostart-test.ps1
 ```
 
@@ -108,6 +111,29 @@ powershell -ExecutionPolicy Bypass -File .\opencode-shim\install-npm-shim.ps1 -V
 
 ---
 
+## Модели
+
+Из коробки настроена **бесплатная** модель шлюза opencode — `space-bunny-free`, ключ не нужен.
+Она прописана в `opencode.jsonc.example.json`, который читают десктоп, CLI и Telegram одинаково.
+
+```powershell
+opencode models          # актуальный список доступных
+```
+
+В мостовом конфиге зарегистрированы 12 моделей с короткими алиасами — реестр для команды `/model`:
+
+```
+/model switch bunny        # space-bunny-free
+/model switch ling         # ling-3.1-flash-free
+/model switch nemotron-l   # nemotron-3.5-lightning-free
+...
+```
+
+**Модель по умолчанию не закрепляется в мостовом конфиге намеренно** — прописанный там `model`
+ломает `/model switch`. Значение живёт только в общем конфиге opencode.
+
+---
+
 ## Расхождение версий — главный источник боли
 
 Этот проект существует в основном потому, что **cc-connect 1.5.0 писался под более старый
@@ -124,13 +150,15 @@ OpenCode**, а более новый OpenCode на неизвестный фла
 ```
 SKILL.md                    разбор: архитектура, все шаги, 15 граблей
 install-autostart.ps1       регистрация задач планировщика (+/- -Uninstall)
-config.example.toml         шаблон конфига, без секретов
+config.example.toml         шаблон конфига моста, 12 бесплатных моделей
+opencode.jsonc.example.json модель по умолчанию для всех клиентов сразу
 autostart-test.ps1          автотест, секции A–F, включая живой round-trip распознавания
 start-cc-connect.ps1        лаунчер моста
 gigaam-stt/server.py        OpenAI-совместимый STT поверх Handy (только stdlib)
 gigaam-stt/start-gigaam-stt.ps1
 opencode-shim/              шим совместимости + тесты + install-npm-shim.ps1
 stt-selftest.txt            фраза для автотеста
+tools/                      санайтизатор путей и проверка синтаксиса перед публикацией
 ```
 
 ---

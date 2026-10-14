@@ -86,16 +86,67 @@ cmd      = ["opencode"]
 work_dir = "<PROJECT_DIR>"
 mode     = "yolo"
 
-# ── Модель ────────────────────────────────────────────────
-# Намеренно НЕ закреплена: прописанный model ломает /model switch.
-# Переключай в чате: /model
+# ── Модели ─────────────────────────────────────────────────
+# Реестр для команды /model в чате. Все перечисленные - бесплатные
+# модели шлюза opencode, ключ не нужен.
+#
+# Алиас - короткое имя: /model switch bunny
+# Актуальный список: opencode models
+#
+# САМА модель по умолчанию здесь намеренно НЕ закреплена: прописанный
+# model ломает /model switch. Значение по умолчанию живёт в общем
+# конфиге opencode - см. opencode.jsonc.example.json.
 
 [[projects.agent.providers]]
 name = "opencode"
 
 [[projects.agent.providers.models]]
-model = "opencode/<model-id>"
-alias = "main"
+model = "opencode/space-bunny-free"
+alias = "bunny"
+
+[[projects.agent.providers.models]]
+model = "opencode/cat-jam-free"
+alias = "jam"
+
+[[projects.agent.providers.models]]
+model = "opencode/ling-3.1-flash-free"
+alias = "ling"
+
+[[projects.agent.providers.models]]
+model = "opencode/ling-3.0-flash-fin-free"
+alias = "ling-fin"
+
+[[projects.agent.providers.models]]
+model = "opencode/step-5-preview-free"
+alias = "step"
+
+[[projects.agent.providers.models]]
+model = "opencode/longcat-2.5-preview-free"
+alias = "longcat"
+
+[[projects.agent.providers.models]]
+model = "opencode/mimo-v2.6-flash-free"
+alias = "mimo"
+
+[[projects.agent.providers.models]]
+model = "opencode/muse-spark-1.3-contributor-free"
+alias = "muse"
+
+[[projects.agent.providers.models]]
+model = "opencode/nemotron-3-ultra-free"
+alias = "nemotron"
+
+[[projects.agent.providers.models]]
+model = "opencode/nemotron-3.5-lightning-free"
+alias = "nemotron-l"
+
+[[projects.agent.providers.models]]
+model = "opencode/exo-free"
+alias = "exo"
+
+[[projects.agent.providers.models]]
+model = "opencode/big-pickle"
+alias = "pickle"
 
 [[projects.platforms]]
 type = "telegram"

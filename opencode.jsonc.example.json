@@ -1,0 +1,22 @@
+{
+  "//": [
+    "Шаблон общего конфига OpenCode. Скопируй в ~/.config/opencode/opencode.jsonc.",
+    "",
+    "Этот файл читают ВСЕ клиенты - десктоп, CLI и Telegram-мост.",
+    "Именно здесь живёт модель по умолчанию: в config.toml моста её",
+    "закреплять нельзя, там прописанный model ломает /model switch.",
+    "",
+    "Все перечисленные модели бесплатные, ключ не нужен.",
+    "Актуальный список: opencode models"
+  ],
+
+  "shell": "bash",
+
+  "model": "opencode/space-bunny-free",
+
+  "agent": {
+    "build":   { "model": "opencode/space-bunny-free" },
+    "general": { "model": "opencode/space-bunny-free" },
+    "plan":    { "model": "opencode/space-bunny-free" }
+  }
+}
