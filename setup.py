@@ -590,6 +590,9 @@ def main() -> int:
     ap.add_argument("--token", default="")
     ap.add_argument("--name", default="")
     ap.add_argument("--autostart", action="store_true", help="register logon tasks")
+    ap.add_argument("--no-autostart", action="store_true",
+                    help="skip the autostart question and do not register tasks "
+                         "(used by the installer test, which must not touch this machine)")
     ap.add_argument("--force", action="store_true", help="overwrite opencode.jsonc")
     ap.add_argument("--dry-run", action="store_true",
                     help="ask everything and print the summary, change nothing")
@@ -609,7 +612,7 @@ def main() -> int:
         session_name = step_name(args.yes, project, args.name)
         stt, _ = step_voice(state)
         tts = step_tts(state)
-        autostart = args.autostart or step_autostart_question()
+        autostart = False if args.no_autostart else (args.autostart or step_autostart_question())
 
         print()
         print(rule())

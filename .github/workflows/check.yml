@@ -23,6 +23,9 @@ jobs:
       - name: templates are installable
         run: python tools\check-install.py
 
+      - name: the installer writes what it was asked
+        run: python tools\check-setup-writes.py
+
       - name: no secrets committed
         shell: pwsh
         run: |
