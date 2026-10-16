@@ -190,7 +190,7 @@ def ask_choice(title: str, options: list[str], default_index: int = 0) -> int:
 
 # ── steps ──────────────────────────────────────────────────────────────────
 
-def step_dependencies() -> dict:
+def step_dependencies(noninteractive: bool = False) -> dict:
     """Check every dependency against its official registry, offer to update.
 
     Every version comes from the registry itself (npm view, pip index, winget
@@ -269,8 +269,13 @@ def step_dependencies() -> dict:
         if not d.safe_auto:
             no(f"{d.label} is required and is missing")
             info(f"    {d.install}")
-            if not args_noninteractive_default():
-                input("")
+            # Never block here. `--yes` promises an unattended run, and a
+            # machine that lacks ffmpeg would otherwise sit at an invisible
+            # prompt until stdin closed - which on a CI runner is an
+            # EOFError, and on a desktop is a wizard that looks hung.
+            if not noninteractive:
+                print()
+                ask_yes_no("continue without it?", default=True)
             continue
         if ask_yes_no(f"install {d.label} now? ({d.install})", default=True):
             good, tail = deps.install(d, timeout=900)
@@ -295,10 +300,6 @@ def step_dependencies() -> dict:
             info("    open Handy once and download a model - GigaAM handles Russian well")
 
     return state
-
-
-def args_noninteractive_default() -> bool:
-    return False
 
 
 def acquire_lock():
@@ -939,7 +940,7 @@ def main() -> int:
     lock = None
     try:
         lock = acquire_lock()
-        state = step_dependencies()
+        state = step_dependencies(args.yes)
         if not step_preflight():
             info("stopping before anything was written")
             return 1

@@ -162,7 +162,10 @@ def why_unreadable(dep: Dep) -> str:
     if dep.kind == "npm":
         checker = f"npm ls -g {dep.pkg} --depth=0 --json"
     elif dep.kind == "pip":
-        checker = f'"{candidate_pythons()[0]}" -m pip show {dep.pkg}'
+        pythons = candidate_pythons()
+        if not pythons:
+            return "no Python interpreter found to ask"
+        checker = f'"{pythons[0]}" -m pip show {dep.pkg}'
     elif dep.kind == "winget":
         checker = f"winget list --id {dep.pkg} --exact"
     else:
@@ -229,7 +232,7 @@ def sys_executable() -> str:
 
 
 def candidate_pythons() -> list[str]:
-    r"""Every interpreter worth asking, not just the one running this file.
+    r"""Every interpreter worth ASKING, not just the one running this file.
 
     Three ways this goes wrong, all hit in testing:
 
@@ -240,9 +243,14 @@ def candidate_pythons() -> list[str]:
     - USERPROFILE is already an absolute path ('C:\Users\name'), not a user
       name. Building 'C:\Users\{USERPROFILE}\' yields
       'C:\Users\C:\Users\name\', which matches nothing.
-    - sys.executable may be an unrelated tool's virtualenv. Those are skipped:
-      installing into somebody else's venv is exactly the mistake this project
-      already had to unpick once.
+    - on a clean machine - a CI runner, a fresh profile - nothing else
+      matches, so this returned an empty list, and one frame later
+      something indexed [0] and died. CI caught it before a user did.
+
+    That last point reverses an earlier decision, deliberately. Skipping venvs
+    was about never INSTALLING into another tool's environment - a real
+    mistake this project had to unpick once. Asking one what it has is
+    harmless, and refusing to ask it is exactly what emptied the list.
     """
     import glob
     import os
@@ -251,12 +259,13 @@ def candidate_pythons() -> list[str]:
     out: list[str] = []
 
     def add(path: str) -> None:
-        if path and path not in out and os.path.exists(path) and "\\venv\\" not in path.lower():
+        if path and path not in out and os.path.exists(path):
             out.append(path)
 
-    # the interpreter running us, unless it is someone's venv
-    if "\\venv\\" not in _sys.executable.lower():
-        add(_sys.executable)
+    # Always ask the interpreter running us, even when it is a virtualenv.
+    # Never install into a foreign venv - but refusing to read one only
+    # means knowing less about the machine.
+    add(_sys.executable)
 
     # every standard CPython install for the current user
     programs = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Python")
