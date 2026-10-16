@@ -19,16 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-This project bundles tooling around third-party software that remains under
-its own license:
-
-  cc-connect  - MIT, https://github.com/chenhg5/cc-connect
-  OpenCode    - https://github.com/sst/opencode
-  Handy       - speech-to-text runtime, https://github.com/handy-computer
-  GigaAM      - speech recognition model, Sber AI
-
-Speech recognition and synthesis run locally. No audio or text is transmitted
-anywhere by this repository's own code.
