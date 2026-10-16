@@ -55,6 +55,18 @@ $ShBackup  = "$ShFile.orig-backup"
 if ($Verify) {
     $bad = 0
 
+    # A machine without OpenCode has nothing to be wired. Reporting MISSING
+    # launchers there turns "this runner has no npm install" into a red
+    # build, which is the same mistake as asking a question nobody could
+    # answer and treating the silence as a no. Say so and pass.
+    $launchers = @($CmdFile, $ShFile) | Where-Object { Test-Path -LiteralPath $_ }
+    if ($launchers.Count -eq 0) {
+        Write-Host ''
+        Write-Host 'SKIPPED  no npm opencode launcher on this machine - nothing to verify.' -ForegroundColor DarkGray
+        Write-Host '         Install it with: npm install -g @opencode/cli' -ForegroundColor DarkGray
+        exit 0
+    }
+
     foreach ($f in @($CmdFile, $ShFile)) {
         if (-not (Test-Path -LiteralPath $f)) { Write-Host "MISSING  $f"; $bad++; continue }
         $text = Get-Content -LiteralPath $f -Raw

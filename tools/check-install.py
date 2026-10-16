@@ -101,20 +101,32 @@ def main() -> int:
         live = {l.strip() for l in r.stdout.decode("utf-8", "replace").splitlines()
                 if l.strip().startswith("opencode/")}
         declared = {m["model"] for m in models}
-        report(declared <= live, "declared models exist upstream",
-               f"missing: {sorted(declared - live)}" if declared - live else "")
-        if live - declared:
-            # Upstream added models. Not an error - the template is not
-            # required to list every free model the gateway happens to offer,
-            # and failing here would turn every routine upstream release into
-            # a red build. It is a suggestion, so it stays a suggestion.
-            notice("upstream models not in the template",
-                   f"add to config.example.toml if you want them in /model: "
-                   f"{', '.join(sorted(live - declared))}")
+
+        if not live:
+            # OpenCode is not installed here - a CI runner, or a contributor
+            # who has not run setup.py. Without this branch the check below
+            # reports that every declared model is missing upstream, which is
+            # not a finding about the template, it is a finding about the
+            # machine. An unanswerable question is not a "no".
+            notice("upstream model list unavailable - comparison skipped",
+                   "no `opencode` binary on PATH, so declared vs live "
+                   "cannot be checked here")
         else:
-            report(True, "no upstream model is unregistered")
+            report(declared <= live, "declared models exist upstream",
+                   f"missing: {sorted(declared - live)}" if declared - live else "")
+            if live - declared:
+                # Upstream added models. Not an error - the template is not
+                # required to list every free model the gateway happens to
+                # offer, and failing here would turn every routine upstream
+                # release into a red build. A suggestion stays a suggestion.
+                notice("upstream models not in the template",
+                       f"add to config.example.toml if you want them in "
+                       f"/model: {', '.join(sorted(live - declared))}")
+            else:
+                report(True, "no upstream model is unregistered")
     except subprocess.TimeoutExpired:
-        report(False, "opencode models reachable", "timed out")
+        # A timeout is not evidence about the template either.
+        notice("opencode models timed out - comparison skipped")
 
     print("== opencode.jsonc.example.json ==")
     oc = ROOT / "opencode.jsonc.example.json"
