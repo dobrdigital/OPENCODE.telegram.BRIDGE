@@ -52,22 +52,6 @@ jobs:
           }
           Write-Host 'package names consistent'
 
-      - name: no secrets committed
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $tracked = git ls-files
-          $bad = @()
-          foreach ($f in $tracked) {
-            $hit = Select-String -Path $f -Pattern 'AAHBcy|token\s*=\s*"[0-9]{8,}:|hi58UTjo' -ErrorAction SilentlyContinue
-            if ($hit) { $bad += $f }
-          }
-          if ($bad.Count) {
-            Write-Error "possible secret in: $($bad -join ', ')"
-            exit 1
-          }
-          Write-Host "clean: $($tracked.Count) files scanned"
-
       - name: paths are portable
         run: python tools\sanitize-paths.py --check
 
@@ -87,12 +71,16 @@ jobs:
         # cosmetic one, and the person running the installer has no way to
         # tell a load-bearing question from a formality.
 
-      - name: repo carries no caches or build leftovers
+      - name: repo carries no caches, leftovers or secrets
         run: python tools\audit.py --only repo
-        # On a clean checkout this group is silent by definition. On a
-        # developer machine it catches what a tool wrote into the repository:
-        # pip/cache and PowerShell's ModuleAnalysisCache were both committed
-        # in the first commit, before any test could catch them.
+        # One implementation for all three, deliberately. This group used to
+        # have a second, inline PowerShell scanner for secrets - which matched
+        # its own pattern text (the literal 'AAHBcy' sat one line above the
+        # Select-String that searched for it) and failed the build over the
+        # deliberately fake bot tokens in the installer tests. A check that
+        # flags its own source and the fixtures it is meant to permit is
+        # worse than no check, and it duplicated a rule that already existed
+        # here and knows the difference between a fixture and a credential.
 
   shim:
     name: compatibility shim
