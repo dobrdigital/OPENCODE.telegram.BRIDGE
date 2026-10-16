@@ -109,26 +109,6 @@ model = "opencode/cat-jam-free"
 alias = "jam"
 
 [[projects.agent.providers.models]]
-model = "opencode/ling-3.1-flash-free"
-alias = "ling"
-
-[[projects.agent.providers.models]]
-model = "opencode/ling-3.0-flash-fin-free"
-alias = "ling-fin"
-
-[[projects.agent.providers.models]]
-model = "opencode/step-5-preview-free"
-alias = "step"
-
-[[projects.agent.providers.models]]
-model = "opencode/longcat-2.5-preview-free"
-alias = "longcat"
-
-[[projects.agent.providers.models]]
-model = "opencode/mimo-v2.6-flash-free"
-alias = "mimo"
-
-[[projects.agent.providers.models]]
 model = "opencode/muse-spark-1.3-contributor-free"
 alias = "muse"
 
@@ -141,8 +121,28 @@ model = "opencode/nemotron-3.5-lightning-free"
 alias = "nemotron-l"
 
 [[projects.agent.providers.models]]
-model = "opencode/exo-free"
-alias = "exo"
+model = "opencode/nemotron-3.5-super-vl-free"
+alias = "nemotron-vl"
+
+[[projects.agent.providers.models]]
+model = "opencode/deepseek-v4.1-flash-free"
+alias = "deepseek"
+
+[[projects.agent.providers.models]]
+model = "opencode/glm-5.3-flash-free"
+alias = "glm"
+
+[[projects.agent.providers.models]]
+model = "opencode/ll-alpha-free"
+alias = "ll"
+
+[[projects.agent.providers.models]]
+model = "opencode/longcat-2.5-preview-free"
+alias = "longcat"
+
+[[projects.agent.providers.models]]
+model = "opencode/mimo-v2.6-flash-free"
+alias = "mimo"
 
 [[projects.agent.providers.models]]
 model = "opencode/big-pickle"

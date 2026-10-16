@@ -1,12 +1,204 @@
-# cc-connect ↔ OpenCode: Telegram-мост с локальным голосом
+<div align="center">
 
-Поднимает OpenCode в Telegram через мост [cc-connect](https://github.com/chenhg5/cc-connect) так,
-чтобы **одна сессия была общей** для Telegram, десктоп-клиента и CLI — плюс распознавание речи
-локально (GigaAM на своей видеокарте) и голосовые ответы. Windows.
+> 🇷🇺 **Русская версия доступна ниже** — [перейти к русской документации ↓](#ru)
 
-Полный разбор с обоснованиями и граблями — в **[SKILL.md](SKILL.md)**. Здесь быстрый старт.
+# 📱 OPENCODE.telegram.BRIDGE
+
+**Drive OpenCode from Telegram — one shared session with the desktop app and the CLI, plus fully local voice.**
+
+![Platform: Windows](https://img.shields.io/badge/platform-Windows-0078D4)
+![Installer: Python 3.11+](https://img.shields.io/badge/installer-Python-3.11%2B-blue)
+![Shim tests: 24/24](https://img.shields.io/badge/shim_tests-24%2F24-brightgreen)
+![Docs: EN / RU](https://img.shields.io/badge/docs-EN%20%2F%20RU-blue)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
+
+[**Install**](#-install) · [**How it works**](#-how-it-works) · [**Audit**](#-audit-every-mismatch-at-once) · [**Troubleshooting**](#-if-something-breaks) · [**Why the shim is mandatory**](#-why-install-npm-shimps1-is-mandatory) · [**Русский**](#ru)
+
+</div>
 
 ---
+
+## What it gives you
+
+```
+Telegram ──┐
+Desktop  ──┼─→ cc-connect ──→ opencode-cli serve --service ──→ opencode.db
+CLI TUI  ──┘                      (ONE server, ONE session)
+
+voice in  : Telegram OGG → ffmpeg → MP3 → shim → GigaAM GGUF (Vulkan) → text
+voice out : edge-tts (no API key), only after you ask with /tts always
+```
+
+No API keys. No cloud. No subscription. The model is a free gateway model and voice
+recognition runs on your own GPU.
+
+The point is the single shared session. Two servers means two isolated histories that
+never agree, so the bridge is wired to the same `serve --service` the desktop app uses.
+
+---
+
+## Requirements
+
+| | How to check |
+|---|---|
+| Node.js + the `opencode` CLI | `opencode --version` |
+| cc-connect | `npm i -g cc-connect` |
+| **ffmpeg** | `ffmpeg -version` — both voice paths need it |
+| Python 3.11+ | for the installer and the shim |
+| Handy with a GigaAM model | `handy.exe --list-models --json` → `"is_downloaded": true` |
+| `edge-tts` | `pip install edge-tts` — only for spoken replies |
+
+The installer checks every one of these against the live registries, offers to update
+what is outdated, and installs what is missing — after you agree.
+
+---
+
+## Install
+
+```powershell
+git clone https://github.com/dobrdigital/OPENCODE.telegram.BRIDGE.git
+cd OPENCODE.telegram.BRIDGE
+python setup.py
+```
+
+Nine steps. It writes the configs, wires the shim, registers the scheduled tasks and
+verifies the result. The only thing you need beforehand is a bot token from
+[@BotFather](https://t.me/BotFather).
+
+See what it would do without touching anything:
+
+```powershell
+python setup.py --dry-run
+```
+
+Unattended:
+
+```powershell
+python setup.py --yes --project-dir C:\src\my-app --token 123:ABC --name demo --autostart
+```
+
+Every step says what it is for and what breaks without it. After writing, the installer
+**reads each answer back off disk and compares**. A mismatch stops the run rather than
+leaving a silently wrong config in place.
+
+Full manual steps are in [README.ru](#ru) and in [SKILL.md](SKILL.md).
+
+---
+
+## Audit every mismatch at once
+
+```powershell
+python tools\audit.py               # human readable
+python tools\audit.py --json        # machine readable
+python tools\audit.py --only config # one group
+```
+
+Nearly everything that breaks here fails silently. OpenCode prints its help text and
+exits 1 on a flag it does not recognise, so a wrong argument is indistinguishable from
+a missing feature — and nothing announces itself. The audit reads the repository, the
+live install and the machine, prints **every** mismatch rather than stopping at the
+first, and puts the fixing command next to each line. It only ever reads.
+
+| Group | What it reconciles |
+|---|---|
+| `repo` | caches and leftovers committed by a tool run from the repo root, oversized files, tokens |
+| `dep` | installed version against the live npm / pip / winget registry |
+| `config` | multi-element `cmd`, a pinned `model`, `reset_on_idle_mins`, unreplaced placeholders, `speech` with nothing on its port |
+| `shim` | both npm launchers — `opencode.cmd` **and** the extensionless `opencode` — routed through the shim |
+| `task` | registered, correct working directory, shim delay strictly before the bridge delay |
+| `runtime` | port occupancy, how many servers are running, and **whether the server can see every session** |
+| `skew` | all three opencode CLI copies against each other |
+| `sessions` | a summary of the session table; deletes nothing |
+| `drift` | repository against the live install |
+
+---
+
+## Why `install-npm-shim.ps1` is mandatory
+
+cc-connect 1.5.0 calls OpenCode in two ways that 2.0.x rejects:
+
+```
+opencode run --dir <workDir>      → Unrecognized flag: --dir
+opencode session list --json      → needs --format json, otherwise a silent exit 1
+```
+
+Both fail with a wall of help text and a non-zero exit code, which reads like a broken
+feature rather than a rejected flag. The script redirects the npm launcher through a
+shim that fixes this.
+
+**Any `npm i -g @opencode/cli` overwrites the shim.** After updating:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\opencode-shim\install-npm-shim.ps1 -Verify
+```
+
+`-Verify` changes nothing and returns 1 when a repair is needed. `tools/audit.py --only shim`
+reports the same thing without needing the script.
+
+---
+
+## If something breaks
+
+| Symptom | What to do |
+|---|---|
+| `/list` says `exit status 1` | `opencode-shim/install-npm-shim.ps1` |
+| stopped working after `npm update` | same script; `-Verify` only checks |
+| `/list` empty but the database has sessions | `restart-server.ps1` — restart the OpenCode server, **not** the machine |
+| desktop does not show the Telegram session | open the same project folder in the desktop |
+| bot silent after a reboot | the scheduled tasks, see [SKILL.md](SKILL.md) |
+| nothing explains itself | `python tools\audit.py` first |
+
+---
+
+## Models
+
+A **free** gateway model ships configured — `space-bunny-free`, no key required. It is
+written to `opencode.jsonc.example.json`, which the desktop, the CLI and Telegram all
+read, so they start on the same model.
+
+```powershell
+opencode models          # what is actually available now
+```
+
+Twelve models with short aliases are registered for the in-chat `/model` command:
+
+```
+/model switch bunny        # space-bunny-free
+/model switch glm          # glm-5.3-flash-free
+/model switch nemotron-l   # nemotron-3.5-lightning-free
+...
+```
+
+The default is **deliberately not pinned** in the bridge config: a `model` set there
+silently breaks `/model switch`. It lives only in the shared opencode config.
+
+---
+
+## Version skew is the real enemy
+
+This project exists mostly because **cc-connect 1.5.0 was written against an older
+OpenCode**, and a newer OpenCode does not complain about an unknown flag — it prints its
+help and exits 1.
+
+Three copies of the opencode CLI exist on a typical machine, updated by three different
+schedules: the npm one, the one bundled in the desktop app, and the versioned one the
+live server actually runs from. `tools/audit.py --only skew` compares all three and
+separates a major/minor difference (FAIL — different code lines) from a patch difference
+(WARN — probably harmless).
+
+If something breaks "for no reason", start with `python tools\audit.py`.
+
+---
+
+## License
+
+MIT. Built around [cc-connect](https://github.com/chenhg5/cc-connect) and
+[OpenCode](https://github.com/sst/opencode); both are the work of their authors.
+---
+
+<a id="ru"></a>
+
+## Русская документация
 
 ## Что это даёт
 
@@ -249,7 +441,7 @@ python tools\check-steps.py
 |---|---|
 | `/list` → `exit status 1` | `opencode-shim/install-npm-shim.ps1` |
 | после `npm update` перестало работать | там же — `-Verify` только проверяет |
-| `/list` пуст, а сессии в базе есть | устаревшая служба, нужен перезапуск машины |
+| `/list` пуст, а сессии в базе есть | устаревший сервер → `restart-server.ps1`, **не** перезагрузка ОС |
 | десктоп не показывает сессию Telegram | открой ту же папку проекта в десктопе |
 | бот молчит после перезагрузки | задачи планировщика, см. ниже |
 
@@ -271,7 +463,7 @@ opencode models          # актуальный список доступных
 
 ```
 /model switch bunny        # space-bunny-free
-/model switch ling         # ling-3.1-flash-free
+/model switch glm          # glm-5.3-flash-free
 /model switch nemotron-l   # nemotron-3.5-lightning-free
 ...
 ```
